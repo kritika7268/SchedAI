@@ -1,0 +1,442 @@
+/* =========================
+GLOBAL
+========================= */
+
+* {
+  box-sizing: border-box;
+  }
+
+html,
+body,
+#root {
+margin: 0;
+min-height: 100%;
+}
+
+body {
+font-family: Arial, Helvetica, sans-serif;
+background: #f6f8fc;
+color: #1f2937;
+}
+
+a {
+text-decoration: none;
+}
+
+/* =========================
+APP LAYOUT
+========================= */
+
+.app {
+display: flex;
+min-height: 100vh;
+background: #f6f8fc;
+}
+
+/* =========================
+SIDEBAR
+========================= */
+
+.sidebar {
+width: 250px;
+min-height: 100vh;
+
+background: #1e293b;
+color: white;
+
+padding: 25px 15px;
+
+position: fixed;
+left: 0;
+top: 0;
+
+overflow-y: auto;
+
+box-shadow: 3px 0 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Sidebar Header */
+
+.sidebar-header {
+padding: 5px 10px 25px;
+border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+margin-bottom: 20px;
+}
+
+.sidebar-header h2 {
+margin: 0;
+font-size: 20px;
+line-height: 1.4;
+}
+
+.sidebar-header p {
+margin: 6px 0 0;
+font-size: 12px;
+color: #94a3b8;
+}
+
+/* Sidebar Navigation */
+
+.sidebar-nav {
+display: flex;
+flex-direction: column;
+gap: 7px;
+}
+
+.sidebar-nav a {
+display: flex;
+align-items: center;
+gap: 12px;
+
+color: #cbd5e1;
+
+padding: 12px 14px;
+
+border-radius: 8px;
+
+font-size: 15px;
+
+transition:
+background 0.2s ease,
+color 0.2s ease,
+transform 0.2s ease;
+}
+
+.sidebar-nav a span {
+width: 22px;
+text-align: center;
+font-size: 16px;
+}
+
+.sidebar-nav a:hover {
+background: #334155;
+color: #ffffff;
+transform: translateX(4px);
+}
+
+/* =========================
+MAIN CONTENT
+========================= */
+
+.main-content {
+margin-left: 250px;
+
+width: calc(100% - 250px);
+
+min-height: 100vh;
+
+background: #f6f8fc;
+}
+
+/* =========================
+DASHBOARD
+========================= */
+
+.dashboard {
+padding: 45px;
+min-height: 100vh;
+}
+
+/* Dashboard Header */
+
+.dashboard-header {
+margin-bottom: 35px;
+}
+
+.dashboard-header h1 {
+margin: 0 0 10px;
+
+font-size: 32px;
+font-weight: 700;
+
+color: #111827;
+}
+
+.dashboard-header p {
+margin: 0;
+
+font-size: 16px;
+
+color: #6b7280;
+
+line-height: 1.6;
+}
+
+/* =========================
+DASHBOARD GRID
+========================= */
+
+.dashboard-grid {
+display: grid;
+
+grid-template-columns:
+repeat(auto-fit, minmax(250px, 1fr));
+
+gap: 24px;
+
+max-width: 1300px;
+}
+
+/* =========================
+DASHBOARD CARD LINK
+========================= */
+
+.dashboard-card-link {
+display: block;
+color: inherit;
+}
+
+/* =========================
+DASHBOARD CARD
+========================= */
+
+.dashboard-card {
+position: relative;
+
+background: #ffffff;
+
+border: 1px solid #e5e7eb;
+
+border-radius: 14px;
+
+padding: 24px;
+
+min-height: 145px;
+
+box-shadow:
+0 2px 8px rgba(15, 23, 42, 0.04);
+
+transition:
+transform 0.25s ease,
+box-shadow 0.25s ease,
+border-color 0.25s ease;
+
+overflow: hidden;
+}
+
+/* Card Hover */
+
+.dashboard-card:hover {
+transform: translateY(-6px);
+
+border-color: #cbd5e1;
+
+box-shadow:
+0 12px 28px rgba(15, 23, 42, 0.10);
+}
+
+/* Card Heading */
+
+.dashboard-card h2 {
+margin: 0 0 12px;
+
+font-size: 19px;
+
+color: #1f2937;
+
+font-weight: 600;
+}
+
+/* Card Description */
+
+.dashboard-card p {
+margin: 0;
+
+color: #6b7280;
+
+font-size: 14px;
+
+line-height: 1.6;
+
+max-width: 90%;
+}
+
+/* Card Arrow */
+
+.card-arrow {
+position: absolute;
+
+right: 20px;
+bottom: 18px;
+
+font-size: 22px;
+
+color: #94a3b8;
+
+transition:
+transform 0.2s ease,
+color 0.2s ease;
+}
+
+.dashboard-card:hover .card-arrow {
+transform: translateX(5px);
+
+color: #475569;
+}
+
+/* =========================
+GENERAL BUTTONS
+========================= */
+
+button {
+padding: 9px 15px;
+
+border: none;
+
+border-radius: 7px;
+
+cursor: pointer;
+
+font-size: 14px;
+
+font-family: inherit;
+
+transition:
+background 0.2s ease,
+transform 0.15s ease,
+box-shadow 0.2s ease;
+}
+
+button:hover {
+transform: translateY(-1px);
+}
+
+/* =========================
+FORM ELEMENTS
+========================= */
+
+input,
+select,
+textarea {
+border: 1px solid #d1d5db;
+
+border-radius: 7px;
+
+font-family: inherit;
+
+background: white;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+outline: none;
+
+border-color: #64748b;
+
+box-shadow:
+0 0 0 3px rgba(100, 116, 139, 0.12);
+}
+
+/* =========================
+TABLES
+========================= */
+
+table {
+background: white;
+
+border-radius: 10px;
+
+overflow: hidden;
+
+border-collapse: collapse;
+}
+
+th {
+background: #f1f5f9;
+
+color: #334155;
+
+font-weight: 600;
+}
+
+th,
+td {
+padding: 11px;
+}
+
+/* =========================
+MOBILE / TABLET
+========================= */
+
+@media (max-width: 900px) {
+
+.sidebar {
+width: 210px;
+}
+
+.main-content {
+margin-left: 210px;
+
+
+width: calc(100% - 210px);
+
+
+}
+
+.dashboard {
+padding: 30px;
+}
+
+}
+
+/* =========================
+MOBILE
+========================= */
+
+@media (max-width: 650px) {
+
+.app {
+flex-direction: column;
+}
+
+.sidebar {
+position: relative;
+
+
+width: 100%;
+
+min-height: auto;
+
+padding: 18px;
+
+
+}
+
+.sidebar-header {
+margin-bottom: 15px;
+}
+
+.sidebar-nav {
+gap: 5px;
+}
+
+.sidebar-nav a {
+padding: 10px 12px;
+}
+
+.main-content {
+margin-left: 0;
+
+
+width: 100%;
+
+
+.dashboard {
+padding: 25px 18px;
+}
+
+.dashboard-header h1 {
+font-size: 27px;
+}
+
+.dashboard-grid {
+grid-template-columns: 1fr;
+}
+
+gap: 18px;
+
+
+}
+
+}

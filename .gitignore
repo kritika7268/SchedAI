@@ -1,0 +1,32 @@
+# General
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.dist-info/
+*.log
+*.sqlite3
+
+# Virtual environment
+venv/
+.env
+.env.*
+
+# Node / npm
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Vite / build output
+frontend/dist/
+
+# OS generated files
+.idea/
+.vscode/
+
+# Secrets / configuration
+backend/.env
+backend/.env.example
