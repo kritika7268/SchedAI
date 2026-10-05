@@ -12,21 +12,20 @@ function SignupForm({ roleLabel, role, loginPath }) {
   const [teachers, setTeachers] = useState([]);
   const [rollNumber, setRollNumber] = useState("");
   const [teacherId, setTeacherId] = useState("");
-  
+  const [adminCode, setAdminCode] = useState("");
 
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // Teacher signup uses an existing teacher record.
-// Student signup uses roll number to find the student record.
+  // Teacher signup: only teachers the admin already added (and who have no
+  // account yet) are listed — names only, no emails or phone numbers.
   useEffect(() => {
     if (role === "teacher") {
-      fetch(`${API_URL}/teachers`)
+      fetch(`${API_URL}/signup/teachers`)
         .then((res) => res.json())
         .then(setTeachers)
         .catch((err) => console.error("Error fetching teachers:", err));
     }
-
   }, [role]);
 
   const handleSubmit = async (e) => {
@@ -37,8 +36,13 @@ function SignupForm({ roleLabel, role, loginPath }) {
       return;
     }
 
+    if (password.length < 8) {
+      alert("Password must be at least 8 characters");
+      return;
+    }
+
     if (role === "teacher" && !teacherId) {
-      alert("Please select which teacher record this account belongs to");
+      alert("Please select your name from the list");
       return;
     }
 
@@ -47,16 +51,22 @@ function SignupForm({ roleLabel, role, loginPath }) {
       return;
     }
 
+    if (role === "admin" && !adminCode.trim()) {
+      alert("Please enter the admin access code");
+      return;
+    }
+
     try {
       setLoading(true);
 
       const payload = {
-      name: name.trim(),
-      email: email.trim(),
-      password,
-      role,
-      teacher_id: role === "teacher" ? Number(teacherId) : null,
-      roll_number: role === "student" ? rollNumber.trim() : null,
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        role,
+        teacher_id: role === "teacher" ? Number(teacherId) : null,
+        roll_number: role === "student" ? rollNumber.trim() : null,
+        admin_code: role === "admin" ? adminCode.trim() : null,
       };
 
       const response = await fetch(`${API_URL}/signup`, {
@@ -68,21 +78,19 @@ function SignupForm({ roleLabel, role, loginPath }) {
       const data = await response.json();
 
       if (!response.ok) {
-  let message = "Signup failed";
+        let message = "Signup failed";
 
-  if (typeof data.detail === "string") {
-    message = data.detail;
-  } else if (Array.isArray(data.detail)) {
-    message = data.detail
-      .map((err) => err.msg || "Invalid input")
-      .join("\n");
-  } else if (data.detail) {
-    message = JSON.stringify(data.detail);
-  }
+        if (typeof data.detail === "string") {
+          message = data.detail;
+        } else if (Array.isArray(data.detail)) {
+          message = data.detail.map((err) => err.msg || "Invalid input").join("\n");
+        } else if (data.detail) {
+          message = JSON.stringify(data.detail);
+        }
 
-  alert(message);
-  return;
-}
+        alert(message);
+        return;
+      }
 
       alert("Account created. Please log in.");
       navigate(loginPath);
@@ -93,6 +101,14 @@ function SignupForm({ roleLabel, role, loginPath }) {
       setLoading(false);
     }
   };
+
+  const hint = {
+    admin: "Admin accounts are limited. You need the admin access code.",
+    teacher:
+      "Choose your name and use the same email the admin registered for you.",
+    student:
+      "Use your roll number and the same email the admin registered for you.",
+  }[role];
 
   return (
     <div
@@ -116,62 +132,78 @@ function SignupForm({ roleLabel, role, loginPath }) {
           boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
         }}
       >
-        <h1 style={{ marginTop: 0, marginBottom: "24px", fontSize: "24px" }}>
+        <h1 style={{ marginTop: 0, marginBottom: "8px", fontSize: "24px" }}>
           {roleLabel} Signup
         </h1>
+
+        <p style={{ margin: "0 0 20px", fontSize: "13px", color: "#6b7280" }}>
+          {hint}
+        </p>
 
         <form
           onSubmit={handleSubmit}
           style={{ display: "flex", flexDirection: "column", gap: "14px" }}
         >
-        <input
-          type="text"
-          placeholder="Full name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          style={{ padding: "10px" }}
-        />
+          {role === "teacher" && (
+            <select
+              value={teacherId}
+              onChange={(e) => setTeacherId(e.target.value)}
+              style={{ padding: "10px" }}
+            >
+              <option value="">Select your name</option>
+              {teachers.map((t) => (
+                <option key={t.teacher_id} value={t.teacher_id}>
+                  {t.teacher_name}
+                </option>
+              ))}
+            </select>
+          )}
 
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={{ padding: "10px" }}
-        />
+          {role === "student" && (
+            <input
+              type="text"
+              placeholder="Roll Number (e.g. BCA5028)"
+              value={rollNumber}
+              onChange={(e) => setRollNumber(e.target.value)}
+              style={{ padding: "10px" }}
+            />
+          )}
 
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ padding: "10px" }}
-        />
-
-        {role === "teacher" && (
-          <select
-            value={teacherId}
-            onChange={(e) => setTeacherId(e.target.value)}
-            style={{ padding: "10px" }}
-          >
-            <option value="">Select your Teacher record</option>
-            {teachers.map((t) => (
-              <option key={t.teacher_id} value={t.teacher_id}>
-                {t.teacher_name} - {t.email}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {role === "student" && (
           <input
             type="text"
-            placeholder="Roll Number (e.g. BCA5028)"
-            value={rollNumber}
-            onChange={(e) => setRollNumber(e.target.value)}
+            placeholder="Full name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
             style={{ padding: "10px" }}
           />
-      )}
+
+          <input
+            type="email"
+            placeholder={
+              role === "admin" ? "Email" : "Email (the one registered by admin)"
+            }
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            style={{ padding: "10px" }}
+          />
+
+          <input
+            type="password"
+            placeholder="Password (min 8 characters)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={{ padding: "10px" }}
+          />
+
+          {role === "admin" && (
+            <input
+              type="password"
+              placeholder="Admin access code"
+              value={adminCode}
+              onChange={(e) => setAdminCode(e.target.value)}
+              style={{ padding: "10px" }}
+            />
+          )}
 
           <button type="submit" disabled={loading} style={{ padding: "10px" }}>
             {loading ? "Creating account..." : "Sign Up"}

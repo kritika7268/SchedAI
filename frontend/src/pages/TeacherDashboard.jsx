@@ -129,7 +129,7 @@ const style = {
 };
 
 export default function TeacherDashboard() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const teacherId = user?.teacher_id;
 
   const [timetables, setTimetables] = useState([]);
@@ -213,7 +213,6 @@ export default function TeacherDashboard() {
         <p style={{ color:C.muted, marginBottom:24 }}>
           This account isn't connected to a teacher record yet. Contact an admin to link your account.
         </p>
-        <button onClick={logout} style={{ ...style.btn }}>Sign out</button>
       </div>
     </div>
   );
@@ -230,9 +229,6 @@ export default function TeacherDashboard() {
           </div>
           <div style={style.headerRight}>
             <NotificationBell role="teacher" />
-            <button onClick={logout} style={style.logout}>
-              <span>🚪</span> Sign out
-            </button>
           </div>
         </div>
 

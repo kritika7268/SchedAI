@@ -28,6 +28,11 @@ import TeacherSignup from "./auth/TeacherSignup";
 import StudentLogin from "./auth/StudentLogin";
 import StudentSignup from "./auth/StudentSignup";
 import NotificationBell from "./pages/NotificationBell";
+import RoleLayout from "./pages/RoleLayout";
+import Profile from "./pages/Profile";
+import Notes from "./pages/Notes";
+import PYQs from "./pages/PYQs";
+import ImportData from "./pages/ImportData";
 const API_URL = "http://127.0.0.1:8000";
 
 // =========================
@@ -384,26 +389,37 @@ function Dashboard() {
         <DashboardCard to="/admin/syllabus-progress" title="Syllabus Progress" description="Track subject syllabus progress." />
         <DashboardCard to="/admin/project-guides" title="Project Guides" description="Manage final year project guides." />
         <DashboardCard to="/admin/holidays" title="Holiday Calendar" description="Manage department holidays." />
-        <DashboardCard to="/admin/events" title="Events" description="Manage department events." />
+        <DashboardCard to="/admin/notes" title="Notes" description="Manage semester Notes." />
+        <DashboardCard to="/admin/pyqs" title="Previous Year Questions" description="Manage previous year question papers." />
+        <DashboardCard to="/admin/import" title="Import Data" description="Import data from CSV files." />
       </div>
     </div>
   );
 }
 
 // =========================
-// ADMIN LAYOUT (sidebar + logout, wraps every /admin/* page)
+// ADMIN LAYOUT (sidebar + profile + logout, wraps every /admin/* page)
 // =========================
 function AdminLayout() {
-  const { user, logout } = useAuth();
-  const navigate = (path) => (window.location.href = path);
-
-  const handleLogout = () => {
-    logout();
-    navigate("/");
-  };
+  const { user } = useAuth();
 
   return (
     <div className="app">
+      {/* Make the admin sidebar scrollable when the menu is taller than the screen */}
+      <style>{`
+        .sidebar {
+          max-height: 100vh;
+          overflow-y: auto !important;
+          overscroll-behavior: contain;
+        }
+        .sidebar .sidebar-nav {
+          overflow: visible !important;
+          padding-bottom: 24px;
+        }
+        .sidebar::-webkit-scrollbar { width: 6px; }
+        .sidebar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+      `}</style>
+
       <aside className="sidebar">
         <div className="sidebar-header">
           <h2>SchedAI</h2>
@@ -412,6 +428,7 @@ function AdminLayout() {
 
         <nav className="sidebar-nav">
           <Link to="/admin/dashboard"><span>🏠</span>Dashboard</Link>
+          <Link to="/admin/profile"><span>👤</span>Profile</Link>
           <Link to="/admin/departments"><span>🏢</span>Departments</Link>
           <Link to="/admin/teachers"><span>👨‍🏫</span>Teachers</Link>
           <Link to="/admin/subjects"><span>📚</span>Subjects</Link>
@@ -425,27 +442,56 @@ function AdminLayout() {
           <Link to="/admin/project-guides"><span>👨‍💼</span>Project Guides</Link>
           <Link to="/admin/holidays"><span>🎉</span>Holiday Calendar</Link>
           <Link to="/admin/events"><span>📢</span>Events</Link>
-
-          <NotificationBell role="admin" />
-          <a onClick={handleLogout} style={{ cursor: "pointer", marginTop: "20px" }}>
-            <span>🚪</span> Logout
-          </a>
+          <Link to="/admin/notes"><span>📚</span>Notes</Link>
+          <Link to="/admin/pyqs"><span>📝</span>PYQs</Link>
+          <Link to="/admin/import"><span>📥</span>Import Data</Link>
+          
         </nav>
       </aside>
 
       <main className="main-content">
         <div
           style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          padding: "12px 20px",
-          borderBottom: "1px solid #e5e7eb",
-          background: "#fff",
-      }}
-    >
-      <NotificationBell role="admin" />
-    </div>
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 14,
+            padding: "12px 20px",
+            borderBottom: "1px solid #e5e7eb",
+            background: "#fff",
+          }}
+        >
+          <NotificationBell role="admin" />
+          <Link
+            to="/admin/profile"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              textDecoration: "none",
+              color: "#111827",
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            <span
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: "50%",
+                background: "#1e293b",
+                color: "#fff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 13,
+              }}
+            >
+              {(user?.name || "?").charAt(0).toUpperCase()}
+            </span>
+            {user?.name}
+          </Link>
+        </div>
 
         <Outlet />
       </main>
@@ -469,25 +515,31 @@ function App() {
         <Route path="/student/login" element={<StudentLogin />} />
         <Route path="/student/signup" element={<StudentSignup />} />
 
-        {/* Teacher area */}
+        {/* Teacher area (sidebar: Dashboard + Profile) */}
         <Route
-          path="/teacher/dashboard"
+          path="/teacher"
           element={
             <ProtectedRoute allowedRoles={["teacher"]} loginPath="/teacher/login">
-              <TeacherDashboard />
+              <RoleLayout role="teacher" />
             </ProtectedRoute>
           }
-        />
+        >
+          <Route path="dashboard" element={<TeacherDashboard />} />
+          <Route path="profile" element={<Profile role="teacher" />} />
+        </Route>
 
-        {/* Student area */}
+        {/* Student area (sidebar: Dashboard + Profile) */}
         <Route
-          path="/student/dashboard"
+          path="/student"
           element={
             <ProtectedRoute allowedRoles={["student"]} loginPath="/student/login">
-              <StudentDashboard />
+              <RoleLayout role="student" />
             </ProtectedRoute>
           }
-        />
+        >
+          <Route path="dashboard" element={<StudentDashboard />} />
+          <Route path="profile" element={<Profile role="student" />} />
+        </Route>
 
         {/* Admin area: everything below requires an admin login */}
         <Route
@@ -512,6 +564,10 @@ function App() {
           <Route path="project-guides" element={<ProjectGuides />} />
           <Route path="holidays" element={<Holidays />} />
           <Route path="events" element={<Events />} />
+          <Route path="profile" element={<Profile role="admin" />} />
+          <Route path="notes" element={<Notes />} />
+          <Route path="pyqs" element={<PYQs />} />
+          <Route path="import" element={<ImportData />} />
         </Route>
       </Routes>
     </BrowserRouter>

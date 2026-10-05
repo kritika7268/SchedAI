@@ -16,7 +16,10 @@ from app.database import get_db_connection
 
 # IMPORTANT: change this to a long random string before you deploy anywhere
 # public. For a college project running on localhost this is fine as-is.
-SECRET_KEY = "change-this-to-a-long-random-string-before-deploying"
+import os
+
+# JWT secret – read from environment (must be set in Render secrets)
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-this-to-a-long-random-string")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # tokens stay valid for 1 day
 

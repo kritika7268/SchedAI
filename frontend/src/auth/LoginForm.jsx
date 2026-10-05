@@ -27,19 +27,26 @@ function LoginForm({ roleLabel, expectedRole, redirectTo, signupPath }) {
     try {
       setLoading(true);
 
+      // "role" tells the server which login page this is, so a teacher
+      // cannot log in through the admin page (and so on).
       const response = await fetch(`${API_URL}/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          role: expectedRole,
+        }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        alert(data.detail || "Login failed");
+        alert(typeof data.detail === "string" ? data.detail : "Login failed");
         return;
       }
 
+      // safety net (the server already checks this)
       if (data.role !== expectedRole) {
         alert(
           `This is not a ${roleLabel} account. Please use the correct login page.`

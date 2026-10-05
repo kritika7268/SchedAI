@@ -17,3 +17,4 @@ pip install email-validator
 openpyxl>=3.1,<4
 python-multipart>=0.0.9
 pip install ortools "uvicorn[standard]"
+python -m pip install python-dotenv

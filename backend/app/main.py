@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import get_db_connection
-from app.timetable_generator import generate_all, DEFAULT_MAX_CLASSES_PER_TEACHER_PER_DAY, time_label
+from app.timetable_generator import generate_all, DEFAULT_MAX_CLASSES_PER_TEACHER_PER_DAY, time_label, count_conflicts, DAYS as TT_DAYS, DEFAULT_SLOTS as TT_SLOTS
 from fastapi.concurrency import run_in_threadpool
 from app.substitute_engine import auto_assign_substitutes
 from typing import Optional
@@ -18,6 +18,8 @@ import os
 import uuid
 from pathlib import Path
 app = FastAPI(title="SchedAI API")
+from app.imports import router as import_router
+app.include_router(import_router)
 from fastapi import WebSocket, WebSocketDisconnect
 from app.websocket_manager import manager
 
@@ -87,9 +89,14 @@ async def create_notification(
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
+import os
+
+# CORS – allow the frontend URL (set via env) and localhost for development
+frontend_origin = os.getenv("FRONTEND_URL", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        frontend_origin,
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
@@ -101,6 +108,10 @@ app.add_middleware(
 @app.get("/")
 def home():
     return {"message": "SchedAI Backend is Running"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.websocket("/ws/notifications")
@@ -117,17 +128,37 @@ async def websocket_notifications(websocket: WebSocket, role: str = "all"):
 
 # ============================================================
 # NOTES & PYQ FILE STORAGE
-# ============================================================
+# ============================================================      
 
-BASE_DIR = Path(__file__).resolve().parent
-UPLOADS_DIR = BASE_DIR / "uploads"
-
-NOTES_UPLOAD_DIR = UPLOADS_DIR / "notes"
-PYQS_UPLOAD_DIR = UPLOADS_DIR / "pyqs"
-
+NOTES_UPLOAD_DIR = Path("uploads/notes")
+PYQS_UPLOAD_DIR = Path("uploads/pyqs")
 NOTES_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-PYQS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)        
-
+PYQS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+ 
+ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
+MAX_UPLOAD_SIZE_MB = 20
+ 
+ 
+def _validate_and_save_upload(file_bytes: bytes, original_filename: str, dest_dir: Path) -> tuple[str, str]:
+    """
+    Validates extension + size, writes the file under a random name (so
+    two people uploading "notes.pdf" never collide or overwrite each
+    other), and returns (original_filename, stored_filename).
+    """
+    ext = Path(original_filename).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+ 
+    size_mb = len(file_bytes) / (1024 * 1024)
+    if size_mb > MAX_UPLOAD_SIZE_MB:
+        raise HTTPException(status_code=400, detail=f"File exceeds {MAX_UPLOAD_SIZE_MB} MB limit")
+ 
+    stored_filename = f"{uuid.uuid4().hex}{ext}"
+    dest_path = dest_dir / stored_filename
+    with open(dest_path, "wb") as f:
+        f.write(file_bytes)
+ 
+    return original_filename, stored_filename
 
 # ==================== DEPARTMENTS ====================
 
@@ -1937,30 +1968,31 @@ def delete_timetable(timetable_id: int):
 
 
 
+# ==================== AI TIMETABLE GENERATOR (ONE BATCH AT A TIME) ====================
 
-# ==================== AI TIMETABLE GENERATOR (ALL BATCHES) ====================
+def _hms_to_seconds(value):
+    h, m, s = [int(x) for x in _normalize_time_str(value).split(":")]
+    return h * 3600 + m * 60 + s
 
-def _generate_all_sync(auto_publish: bool, time_limit_seconds: int):
+
+def _generate_one_batch_sync(batch_id: int, auto_publish: bool, time_limit_seconds: int):
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
     try:
-        cursor.execute("SELECT batch_id, batch_name, department_id, semester FROM batches ORDER BY batch_id")
-        batch_rows = cursor.fetchall()
-        if not batch_rows:
-            raise HTTPException(status_code=400, detail="No batches found.")
+        # ---- the selected batch ----
+        cursor.execute(
+            "SELECT batch_id, batch_name, department_id, semester FROM batches WHERE batch_id = %s",
+            (batch_id,))
+        b = cursor.fetchone()
+        if not b:
+            raise HTTPException(status_code=404, detail="Batch not found.")
 
-        cursor.execute("SELECT batch_id, COUNT(*) AS c FROM students GROUP BY batch_id")
-        sizes = {r["batch_id"]: r["c"] for r in cursor.fetchall()}
-        batches = [{
-            "batch_id": b["batch_id"], "batch_name": b["batch_name"],
-            "size": max(sizes.get(b["batch_id"], 0), 1),
-            "department_id": b["department_id"], "semester": b["semester"],
-        } for b in batch_rows]
+        cursor.execute("SELECT COUNT(*) AS c FROM students WHERE batch_id = %s", (batch_id,))
+        size = max(cursor.fetchone()["c"], 1)
+        target = {"batch_id": b["batch_id"], "batch_name": b["batch_name"], "size": size,
+                  "department_id": b["department_id"], "semester": b["semester"]}
 
-        cursor.execute("""SELECT subject_id, subject_name, department_id, batch_id, semester,
-                            sessions_per_week, room_type_required FROM subjects""")
-        all_subjects = cursor.fetchall()
-
+        # ---- teachers, skills, rooms ----
         cursor.execute("SELECT teacher_id, subject_id FROM teacher_skills")
         skills = {}
         for r in cursor.fetchall():
@@ -1981,63 +2013,90 @@ def _generate_all_sync(auto_publish: bool, time_limit_seconds: int):
         if not rooms:
             raise HTTPException(status_code=400, detail="No rooms found.")
 
-        subjects_by_batch = {}
-        for b in batches:
-            subjects_by_batch[b["batch_id"]] = [{
-                "subject_id": s["subject_id"], "subject_name": s["subject_name"],
-                "sessions_per_week": int(s["sessions_per_week"] or 0),
-                "room_type_required": s["room_type_required"],
-                "eligible_teacher_ids": [t for t in skills.get(s["subject_id"], []) if t in teachers],
-            } for s in all_subjects
-              if s["department_id"] == b["department_id"]
-              and s["semester"] == b["semester"]
-              and (s["batch_id"] is None or s["batch_id"] == b["batch_id"])]
+        # ---- this batch's subjects ----
+        cursor.execute(
+            """SELECT subject_id, subject_name, sessions_per_week, room_type_required
+               FROM subjects
+               WHERE department_id = %s AND semester = %s
+                 AND (batch_id IS NULL OR batch_id = %s)""",
+            (b["department_id"], b["semester"], batch_id))
+        subs = [{
+            "subject_id": s["subject_id"], "subject_name": s["subject_name"],
+            "sessions_per_week": int(s["sessions_per_week"] or 0),
+            "room_type_required": s["room_type_required"],
+            "eligible_teacher_ids": [t for t in skills.get(s["subject_id"], []) if t in teachers],
+        } for s in cursor.fetchall()]
 
-        # skip batches that have no syllabus / no teacher skills yet
-        skipped = []
-        active_batches = []
-        for b in batches:
-            subs = [x for x in subjects_by_batch[b["batch_id"]] if x["sessions_per_week"] > 0]
-            if not subs:
-                skipped.append({"batch_name": b["batch_name"], "reason": "no subjects (syllabus) added"})
-            elif not any(x["eligible_teacher_ids"] for x in subs):
-                skipped.append({"batch_name": b["batch_name"], "reason": "no teacher skills mapped"})
-            else:
-                active_batches.append(b)
-        batches = active_batches
-        if not batches:
+        active = [x for x in subs if x["sessions_per_week"] > 0]
+        if not active:
             raise HTTPException(status_code=400,
-                                detail="No batch is ready: add subjects and teacher skills first.")
+                detail=f"{b['batch_name']} has no subjects (syllabus) yet. Add subjects first.")
+        if not any(x["eligible_teacher_ids"] for x in active):
+            raise HTTPException(status_code=400,
+                detail=f"{b['batch_name']} has no teacher skills mapped yet. Map teachers to its subjects first.")
 
-        # solve first -> old timetable is deleted ONLY if a solution exists
-        result = generate_all(batches, subjects_by_batch, rooms, teachers,
-                            time_limit_seconds=time_limit_seconds)
+        # ---- other batches' timetable = fixed (must never clash) ----
+        cursor.execute(
+            """SELECT timetable_id, teacher_id, room_id, batch_id, day_of_week, start_time, end_time
+               FROM timetables WHERE batch_id IS NULL OR batch_id != %s""", (batch_id,))
+        other_rows = cursor.fetchall()
+
+        slot_ranges = [(_hms_to_seconds(a), _hms_to_seconds(z)) for a, z in TT_SLOTS]
+        unavailable, busy_rooms = set(), set()
+        existing_daily, existing_weekly, other_for_check = {}, {}, []
+
+        for i, r in enumerate(other_rows):
+            if r["day_of_week"] not in TT_DAYS:
+                continue
+            d = TT_DAYS.index(r["day_of_week"])
+            rs, re_ = _hms_to_seconds(r["start_time"]), _hms_to_seconds(r["end_time"])
+            for t, (ss, se) in enumerate(slot_ranges):
+                if rs < se and re_ > ss:                     # time overlap with slot t
+                    unavailable.add((r["teacher_id"], d, t))
+                    busy_rooms.add((r["room_id"], d, t))
+            existing_daily[(r["teacher_id"], d)] = existing_daily.get((r["teacher_id"], d), 0) + 1
+            existing_weekly[r["teacher_id"]] = existing_weekly.get(r["teacher_id"], 0) + 1
+            other_for_check.append({
+                "day_of_week": r["day_of_week"],
+                "start_time": _normalize_time_str(r["start_time"]),
+                "teacher_id": r["teacher_id"], "room_id": r["room_id"],
+                "batch_id": r["batch_id"] if r["batch_id"] is not None else f"legacy_{i}",
+            })
+
+        # ---- solve (nothing is deleted unless a solution exists) ----
+        result = generate_all(
+            [target], {batch_id: subs}, rooms, teachers,
+            unavailable=unavailable, busy_rooms=busy_rooms,
+            existing_daily=existing_daily, existing_weekly=existing_weekly,
+            time_limit_seconds=time_limit_seconds)
         if result["status"] != "ok":
             return result
 
-        status = "published" if auto_publish else "draft"
-        sem_by_batch = {b["batch_id"]: b["semester"] for b in batches}
+        # real conflict count: this batch's new classes + everyone else's existing classes
+        result["stats"]["conflicts"] = count_conflicts(other_for_check + result["schedule"])
 
-        cursor.execute("DELETE FROM substitutions")   # they point to old timetable rows
-        cursor.execute("DELETE FROM timetables")
+        status = "published" if auto_publish else "draft"
+
+        # replace ONLY this batch's timetable
+        cursor.execute(
+            "DELETE FROM substitutions WHERE timetable_id IN "
+            "(SELECT timetable_id FROM timetables WHERE batch_id = %s)", (batch_id,))
+        cursor.execute("DELETE FROM timetables WHERE batch_id = %s", (batch_id,))
 
         ins = connection.cursor()
         ins.executemany(
             """INSERT INTO timetables
-                (batch_id, day_of_week, start_time, end_time, subject_id,
+               (batch_id, day_of_week, start_time, end_time, subject_id,
                 teacher_id, room_id, semester, status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             [(e["batch_id"], e["day_of_week"], e["start_time"], e["end_time"],
-                e["subject_id"], e["teacher_id"], e["room_id"],
-                sem_by_batch[e["batch_id"]], status) for e in result["schedule"]],
-        )
+              e["subject_id"], e["teacher_id"], e["room_id"], b["semester"], status)
+             for e in result["schedule"]])
         ins.close()
         connection.commit()
 
         result["status_saved"] = status
-        result["batches"] = len(batches)
-        result["skipped"] = skipped
-        result["teacher_names"] = {tid: t["name"] for tid, t in teachers.items()}
+        result["batch_name"] = b["batch_name"]
         return result
 
     except HTTPException:
@@ -2053,42 +2112,35 @@ def _generate_all_sync(auto_publish: bool, time_limit_seconds: int):
 
 @app.post("/generate-timetable")
 async def generate_timetable_endpoint(
-    batch_id: Optional[int] = None,          # ignored, kept so old button still works
+    batch_id: int,
     auto_publish: bool = True,
     time_limit_seconds: int = 60,
 ):
-    result = await run_in_threadpool(_generate_all_sync, auto_publish, time_limit_seconds)
+    result = await run_in_threadpool(
+        _generate_one_batch_sync, batch_id, auto_publish, time_limit_seconds)
 
     if result["status"] != "ok":
         lines = [f"{p['message']} -> {p['suggestion']}" for p in result["problems"]]
         raise HTTPException(
             status_code=409,
             detail="Timetable could not be generated with the current constraints.\n- "
-                + "\n- ".join(lines)
-        )
-
-    skipped_text = ""
-    if result["skipped"]:
-        skipped_text = " Skipped: " + ", ".join(x["batch_name"] for x in result["skipped"]) + "."
+                   + "\n- ".join(lines))
 
     await create_notification(
         title="Timetable Published" if result["status_saved"] == "published" else "Timetable Draft Ready",
-        message=f"The new timetable is ready for {result['batches']} batches." + skipped_text,
+        message=f"The timetable of {result['batch_name']} is ready.",
         audience="all" if result["status_saved"] == "published" else "admin",
         notif_type="success",
     )
 
-    names = result.pop("teacher_names")
     stats = result["stats"]
-    stats["teacher_weekly_load"] = {names.get(k, str(k)): v for k, v in stats["teacher_weekly_load"].items()}
     return {
         "success": True,
-        "message": "Timetable generated successfully",
-        "batches": result["batches"],
-        "skipped_batches": result["skipped"],
+        "message": f"Timetable generated successfully for {result['batch_name']}",
+        "batch_id": batch_id,
         "sessions_created": len(result["schedule"]),
         "conflicts": stats["conflicts"],
-        "stats": stats,
+        "stats": {"optimal": stats["optimal"], "solve_seconds": stats["solve_seconds"]},
     }
 
 @app.get("/teacher-workload")
@@ -2586,10 +2638,14 @@ async def auto_substitute(teacher_id: int, absence_date: str, reason: str = "Not
         insert_cursor.close()
 
         await create_notification(
-            title="Timetable Published",
-            message=("A new timetable has been generated successfully."),
+            title="Teacher Absence Reported",
+            message=(
+                f"{absent_teacher['teacher_name']} is absent on {absence_date}. "
+                f"{len(assigned)}/{len(affected_classes)} classes auto-covered"
+                + (f", {len(unassigned)} need manual attention." if unassigned else ".")
+            ),
             audience="all",
-            notif_type="success",
+            notif_type="warning" if unassigned else "info",
         )
 
         return {
@@ -2919,7 +2975,10 @@ def get_notes(
 @app.post("/notes/upload")
 async def upload_note(
     subject_id: int,
+    teacher_id: int,
     batch_id: int,
+    semester: int,
+    unit: str,
     title: str,
     description: Optional[str] = None,
     file: UploadFile = File(...),
@@ -2973,13 +3032,12 @@ async def upload_note(
         # Check batch.
         cursor.execute(
             """
-            SELECT batch_id
+            SELECT batch_id, semester
             FROM batches
             WHERE batch_id = %s
             """,
             (batch_id,)
         )
-
         batch = cursor.fetchone()
 
         if not batch:
@@ -2988,15 +3046,27 @@ async def upload_note(
                 detail="Batch not found"
             )
 
+        if int(batch["semester"]) != int(semester):
+            raise HTTPException(
+                status_code=400,
+                detail="Selected semester does not match the selected batch"
+            )
+
         # If teacher is uploading, verify they are eligible for the subject.
         if role == "teacher":
 
-            teacher_id = current_user.get("teacher_id")
+            logged_teacher_id = current_user.get("teacher_id")
 
-            if not teacher_id:
+            if not logged_teacher_id:
                 raise HTTPException(
                     status_code=403,
                     detail="Teacher account is not linked to a teacher record"
+                )
+
+            if int(teacher_id) != int(logged_teacher_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="You can upload notes only under your own teacher account"
                 )
 
             cursor.execute(
@@ -3004,16 +3074,16 @@ async def upload_note(
                 SELECT 1
                 FROM teacher_skills
                 WHERE teacher_id = %s
-                  AND subject_id = %s
+                AND subject_id = %s
                 """,
-                (teacher_id, subject_id)
+                (logged_teacher_id, subject_id)
             )
 
             if not cursor.fetchone():
                 raise HTTPException(
-                    status_code=403,
-                    detail="You are not mapped to this subject"
-                )
+                status_code=403,
+                detail="You are not mapped to this subject"
+            )
 
         file_content = await file.read()
 
@@ -3039,30 +3109,35 @@ async def upload_note(
 
         try:
             cursor_insert.execute(
-                """
-                INSERT INTO notes
-                (
-                    subject_id,
-                    batch_id,
-                    title,
-                    description,
-                    file_name,
-                    file_path,
-                    uploaded_by
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    subject_id,
-                    batch_id,
-                    title.strip(),
-                    description.strip() if description else None,
-                    original_filename,
-                    str(stored_path),
-                    uploaded_by
-                )
+            """
+            INSERT INTO notes
+            (
+                subject_id,
+                teacher_id,
+                batch_id,
+                semester,
+                unit,
+                title,
+                description,
+                file_name,
+                file_path,
+                uploaded_by
             )
-
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                subject_id,
+                teacher_id,
+                batch_id,
+                semester,
+                unit.strip(),
+                title.strip(),
+                description.strip() if description else None,
+                original_filename,
+                str(stored_path),
+                uploaded_by
+            )
+        )
             connection.commit()
 
             note_id = cursor_insert.lastrowid
@@ -3122,10 +3197,19 @@ def download_note(
         cursor.execute(
             """
             SELECT
-                n.note_id,
+                n.teacher_id,
+                t.teacher_name,
                 n.batch_id,
+                b.batch_name,
+                b.section,
+                n.semester,
+                n.unit,
+                n.title,
+                n.description,
                 n.file_name,
-                n.file_path
+                n.file_path,
+                n.uploaded_by,
+                n.uploaded_at
             FROM notes n
             WHERE n.note_id = %s
             """,
@@ -3306,7 +3390,7 @@ async def upload_pyq(
     subject_id: int,
     batch_id: int,
     title: str,
-    exam_year: Optional[int] = None,
+    exam_year: int,
     description: Optional[str] = None,
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
@@ -3398,7 +3482,7 @@ async def upload_pyq(
                 SELECT 1
                 FROM teacher_skills
                 WHERE teacher_id = %s
-                  AND subject_id = %s
+                AND subject_id = %s
                 """,
                 (teacher_id, subject_id)
             )
@@ -3643,7 +3727,7 @@ def create_syllabus_progress(
             """
             INSERT INTO syllabus_progress
             (subject_id, teacher_id, semester, total_units,
-             completed_units, last_updated)
+            completed_units, last_updated)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
@@ -4636,6 +4720,11 @@ def get_notifications(role: str = "all", limit: int = 30):
 
 # ==================== AUTH: request models ====================
 
+import os
+
+MAX_ADMIN_ACCOUNTS = int(os.getenv("MAX_ADMINS", "2"))
+
+
 class SignupRequest(BaseModel):
     name: str
     email: str
@@ -4644,129 +4733,148 @@ class SignupRequest(BaseModel):
     teacher_id: int | None = None
     student_id: int | None = None
     roll_number: str | None = None
+    admin_code: str | None = None      # secret code, only needed for admin signup
+
 
 class LoginRequest(BaseModel):
     email: str
     password: str
+    role: str | None = None            # which login page was used (admin / teacher / student)
+
 
 # ==================== AUTH: endpoints ====================
 
+@app.get("/signup/teachers")
+def signup_teacher_list():
+    """Names only (no email/phone) of teachers who don't have an account yet."""
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT t.teacher_id, t.teacher_name
+            FROM teachers t
+            LEFT JOIN users u ON u.teacher_id = t.teacher_id
+            WHERE u.user_id IS NULL
+            ORDER BY t.teacher_name
+            """
+        )
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        connection.close()
+
+        
 @app.post("/signup")
 def signup(payload: SignupRequest):
+    """
+    Signup is restricted:
+      - admin   : needs the admin access code (ADMIN_SIGNUP_CODE in .env, if set)
+                  and at most MAX_ADMINS (default 2) admin accounts can exist
+      - teacher : only a teacher the admin already added, and the email must
+                  match the email the admin saved for that teacher
+      - student : only a student the admin already added (roll number), and the
+                  email must match the email the admin saved for that student
+    """
+    name = payload.name.strip()
+    email = payload.email.strip().lower()
+
     if payload.role not in ("admin", "teacher", "student"):
         raise HTTPException(status_code=400, detail="Invalid role")
-
-    # Teacher account
-    if payload.role == "teacher" and not payload.teacher_id:
-        raise HTTPException(
-            status_code=400,
-            detail="teacher_id is required for a teacher account"
-        )
-
-    # Student account
-    if payload.role == "student" and not payload.roll_number:
-        raise HTTPException(
-            status_code=400,
-            detail="roll_number is required for a student account"
-        )
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if not validate_email_format(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
     try:
-        # Check email
-        cursor.execute(
-            "SELECT user_id FROM users WHERE email = %s",
-            (payload.email,)
-        )
-
+        cursor.execute("SELECT user_id FROM users WHERE LOWER(email) = %s", (email,))
         if cursor.fetchone():
-            raise HTTPException(
-                status_code=400,
-                detail="Email already registered"
-            )
+            raise HTTPException(status_code=400, detail="This email is already registered")
 
-        # Student: find student_id using roll_number
+        teacher_id = None
         student_id = None
 
-        if payload.role == "student":
+        # ---------------- ADMIN ----------------
+        if payload.role == "admin":
+            required_code = os.getenv("ADMIN_SIGNUP_CODE", "")
+            if required_code and (payload.admin_code or "") != required_code:
+                raise HTTPException(status_code=403, detail="Invalid admin access code")
+
+            cursor.execute("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")
+            if cursor.fetchone()["c"] >= MAX_ADMIN_ACCOUNTS:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Admin signup is closed. Only {MAX_ADMIN_ACCOUNTS} admin accounts are allowed.")
+
+        # ---------------- TEACHER ----------------
+        elif payload.role == "teacher":
+            if not payload.teacher_id:
+                raise HTTPException(status_code=400, detail="Please select your name from the teacher list")
+
             cursor.execute(
-                """
-                SELECT student_id
-                FROM students
-                WHERE roll_number = %s
-                """,
-                (payload.roll_number.strip(),)
-            )
+                "SELECT teacher_id, email FROM teachers WHERE teacher_id = %s", (payload.teacher_id,))
+            teacher = cursor.fetchone()
+            if not teacher:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Teacher not found. Ask the admin to add you first.")
 
+            saved_email = (teacher["email"] or "").strip().lower()
+            if not saved_email or saved_email != email:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This email does not match the email the admin registered for this teacher.")
+
+            cursor.execute("SELECT user_id FROM users WHERE teacher_id = %s", (teacher["teacher_id"],))
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="This teacher already has an account")
+
+            teacher_id = teacher["teacher_id"]
+
+        # ---------------- STUDENT ----------------
+        else:
+            roll = (payload.roll_number or "").strip()
+            if not roll:
+                raise HTTPException(status_code=400, detail="Roll number is required")
+
+            cursor.execute(
+                "SELECT student_id, email FROM students WHERE LOWER(roll_number) = LOWER(%s)", (roll,))
             student = cursor.fetchone()
-
             if not student:
                 raise HTTPException(
                     status_code=400,
-                    detail="No student found with this roll number"
-                )
+                    detail="No student found with this roll number. Ask the admin to add you first.")
+
+            saved_email = (student["email"] or "").strip().lower()
+            if not saved_email or saved_email != email:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This email does not match the email the admin registered for this roll number.")
+
+            cursor.execute("SELECT user_id FROM users WHERE student_id = %s", (student["student_id"],))
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="This student already has an account")
 
             student_id = student["student_id"]
 
-            # Check whether this student already has an account
-            cursor.execute(
-                """
-                SELECT user_id
-                FROM users
-                WHERE student_id = %s
-                """,
-                (student_id,)
-            )
-
-            if cursor.fetchone():
-                raise HTTPException(
-                    status_code=400,
-                    detail="This student already has an account"
-                )
-
-        # Teacher: check whether teacher already has an account
-        if payload.role == "teacher":
-            cursor.execute(
-                """
-                SELECT user_id
-                FROM users
-                WHERE teacher_id = %s
-                """,
-                (payload.teacher_id,)
-            )
-
-            if cursor.fetchone():
-                raise HTTPException(
-                    status_code=400,
-                    detail="This teacher already has an account"
-                )
-
-        hashed = hash_password(payload.password)
-
+        # ---------------- CREATE ----------------
         insert_cursor = connection.cursor()
-
         insert_cursor.execute(
             """
-            INSERT INTO users
-            (name, email, password_hash, role, teacher_id, student_id)
+            INSERT INTO users (name, email, password_hash, role, teacher_id, student_id)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (
-                payload.name.strip(),
-                payload.email.strip(),
-                hashed,
-                payload.role,
-                payload.teacher_id if payload.role == "teacher" else None,
-                student_id if payload.role == "student" else None,
-            )
+            (name, email, hash_password(payload.password), payload.role, teacher_id, student_id),
         )
-
         connection.commit()
+        insert_cursor.close()
 
-        return {
-            "message": "Account created successfully"
-        }
+        return {"message": "Account created successfully"}
 
     except HTTPException:
         connection.rollback()
@@ -4775,22 +4883,20 @@ def signup(payload: SignupRequest):
     except Exception as e:
         connection.rollback()
         print("Signup error:", e)
-
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to create account"
-        )
+        raise HTTPException(status_code=500, detail="Unable to create account")
 
     finally:
         cursor.close()
         connection.close()
+
 
 @app.post("/login")
 def login(payload: LoginRequest):
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
-    cursor.execute("SELECT * FROM users WHERE email = %s", (payload.email,))
+    cursor.execute(
+        "SELECT * FROM users WHERE LOWER(email) = %s", (payload.email.strip().lower(),))
     user = cursor.fetchone()
 
     cursor.close()
@@ -4799,6 +4905,15 @@ def login(payload: LoginRequest):
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
 
+    if user.get("is_active") in (0, False):
+        raise HTTPException(status_code=403, detail="This account has been disabled")
+
+    # each login page only lets in its own role
+    if payload.role and payload.role != user["role"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"This is not a {payload.role} account. Please use the {user['role']} login page.")
+
     token = create_access_token({"user_id": user["user_id"], "role": user["role"]})
 
     return {
@@ -4806,6 +4921,7 @@ def login(payload: LoginRequest):
         "token_type": "bearer",
         "role": user["role"],
         "name": user["name"],
+        "email": user["email"],
         "user_id": user["user_id"],
         "teacher_id": user["teacher_id"],
         "student_id": user["student_id"],
@@ -4814,5 +4930,7 @@ def login(payload: LoginRequest):
 
 @app.get("/me")
 def get_me(current_user: dict = Depends(get_current_user)):
-    """Quick way to check if a token is valid and who it belongs to."""
-    return current_user
+    """Who am I? (password hash is never returned)"""
+    safe = dict(current_user)
+    safe.pop("password_hash", None)
+    return safe

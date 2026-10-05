@@ -138,7 +138,7 @@ const TIME_SLOTS = [
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function StudentDashboard() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const studentId = user?.student_id;
 
   const [student,       setStudent]       = useState(null);
@@ -242,7 +242,7 @@ export default function StudentDashboard() {
   }, [timetables]);
 
   // ── render states ───────────────────────────────────────────────────────────
-  if (!studentId) return <NotLinked logout={logout} />;
+  if (!studentId) return <NotLinked />;
 
   if (loading) return (
     <div style={{ ...S.page, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -255,7 +255,6 @@ export default function StudentDashboard() {
       <div style={{ maxWidth:400, textAlign:"center", padding:32 }}>
         <div style={{ fontSize:40, marginBottom:12 }}>⚠️</div>
         <p style={{ color:C.muted }}>{error}</p>
-        <button onClick={logout} style={{ ...S.logout, marginTop:16 }}>Sign out</button>
       </div>
     </div>
   );
@@ -272,7 +271,6 @@ export default function StudentDashboard() {
           </div>
           <div style={S.hdrRight}>
             <NotificationBell role="student" />
-            <button onClick={logout} style={S.logout}>🚪 Sign out</button>
           </div>
         </div>
 
@@ -447,7 +445,7 @@ export default function StudentDashboard() {
 }
 
 // ── Not linked state ──────────────────────────────────────────────────────────
-function NotLinked({ logout }) {
+function NotLinked() {
   return (
     <div style={{ ...S.page, display:"flex", alignItems:"center", justifyContent:"center" }}>
       <div style={{ maxWidth:400, textAlign:"center", padding:32 }}>
@@ -457,11 +455,6 @@ function NotLinked({ logout }) {
           This account isn't connected to a student record yet.
           Contact your admin to link your account.
         </p>
-        <button onClick={logout} style={{
-          padding:"10px 20px", borderRadius:8, fontSize:14,
-          fontWeight:600, cursor:"pointer", border:"none",
-          background:"#7c3aed", color:"#fff"
-        }}>Sign out</button>
       </div>
     </div>
   );
