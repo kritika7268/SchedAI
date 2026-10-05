@@ -14,8 +14,8 @@ uvicorn==0.52.4
 passlib[bcrypt]
 bcrypt==4.0.1
 python-jose[cryptography] 
-pip install email-validator 
+email-validator 
 openpyxl>=3.1,<4
 python-multipart>=0.0.9
-pip install ortools "uvicorn[standard]"
-python -m pip install python-dotenv
+ortools "uvicorn[standard]"
+python-dotenv
