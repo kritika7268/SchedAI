@@ -1,44 +1,53 @@
 services:
-  # Backend – FastAPI (Web Service)
+  # Backend – FastAPI
   - type: web
     name: schedai-backend
-    env: python
+    runtime: python
     plan: starter
     region: oregon
-    buildCommand: |
-      pip install -r backend/requirements.txt
+    buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     autoDeploy: true
+
     envVars:
       - key: MYSQL_HOST
-        fromSecret: MYSQL_HOST
-      - key: MYSQL_PORT
-        fromSecret: MYSQL_PORT
-      - key: MYSQL_USER
-        fromSecret: MYSQL_USER
-      - key: MYSQL_PASSWORD
-        fromSecret: MYSQL_PASSWORD
-      - key: MYSQL_DATABASE
-        fromSecret: MYSQL_DATABASE
-      - key: JWT_SECRET_KEY
-        fromSecret: JWT_SECRET_KEY
-      - key: GEMINI_API_KEY
-        fromSecret: GEMINI_API_KEY
-      - key: FRONTEND_URL
-        fromSecret: FRONTEND_URL
-      - key: BACKEND_URL
-        fromSecret: BACKEND_URL
+        sync: false
 
-  # Frontend – React/Vite (Static Site)
-  - type: static
+      - key: MYSQL_PORT
+        sync: false
+
+      - key: MYSQL_USER
+        sync: false
+
+      - key: MYSQL_PASSWORD
+        sync: false
+
+      - key: MYSQL_DATABASE
+        sync: false
+
+      - key: JWT_SECRET_KEY
+        sync: false
+
+      - key: GEMINI_API_KEY
+        sync: false
+
+      - key: FRONTEND_URL
+        sync: false
+
+      - key: BACKEND_URL
+        sync: false
+
+  # Frontend – React/Vite
+  - type: web
     name: schedai-frontend
-    env: static
+    runtime: static
     plan: starter
     region: oregon
-    buildCommand: |
-      cd frontend && npm ci && npm run build
+
+    buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
     autoDeploy: true
+
     envVars:
       - key: VITE_API_URL
-        fromSecret: BACKEND_URL
+        sync: false
