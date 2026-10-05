@@ -20,3 +20,4 @@ python-multipart>=0.0.9
 ortools 
 uvicorn[standard]
 python-dotenv
+mysql-connector-python
