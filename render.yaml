@@ -42,7 +42,6 @@ services:
     name: schedai-frontend
     runtime: static
     plan: starter
-    region: oregon
 
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
