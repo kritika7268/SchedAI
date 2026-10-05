@@ -11,7 +11,8 @@ starlette==1.6.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.52.4
-passlib[bcrypt]bcrypt==4.0.1 
+passlib[bcrypt]
+bcrypt==4.0.1
 python-jose[cryptography] 
 pip install email-validator 
 openpyxl>=3.1,<4
