@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { ProgressBar, ProgressRing } from "./progressWidgets";
 import HolidayBanner from "./HolidayBanner";
 import NotificationBell from "./NotificationBell";
 
@@ -147,6 +149,7 @@ export default function StudentDashboard() {
   const [substitutions, setSubstitutions] = useState([]);
   const [loading,       setLoading]       = useState(true);
   const [error,         setError]         = useState(null);
+  const [syllabus,      setSyllabus]      = useState(null);
 
   const todayName    = DAYS[new Date().getDay()];
   const todayDate    = todayISODate();
@@ -207,6 +210,17 @@ export default function StudentDashboard() {
       }
     })();
   }, [studentId]);
+
+  // ── syllabus progress (small summary card) ──────────────────────────────────
+  useEffect(() => {
+    if (!user?.access_token) return;
+    fetch(`${API_URL}/syllabus/progress/me`, {
+      headers: { Authorization: `Bearer ${user.access_token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setSyllabus)
+      .catch(() => {});
+  }, [user]);
 
   // ── derived data ────────────────────────────────────────────────────────────
   const todaysRegular = useMemo(() =>
@@ -354,6 +368,38 @@ export default function StudentDashboard() {
             ))
           )}
         </div>
+
+        {/* SYLLABUS PROGRESS */}
+        {syllabus && syllabus.subjects.length > 0 && (
+          <div style={S.card}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+              <p style={{ ...S.lbl, margin:0 }}>Syllabus Progress</p>
+              <Link
+                to="/student/syllabus"
+                style={{ fontSize:13, fontWeight:600, color:C.accent, textDecoration:"none" }}
+              >
+                View details →
+              </Link>
+            </div>
+
+            <div style={{ display:"flex", gap:24, alignItems:"center", flexWrap:"wrap" }}>
+              <ProgressRing percent={syllabus.percent} size={96} sub="overall" />
+              <div style={{ flex:1, minWidth:240 }}>
+                {syllabus.subjects.slice(0, 5).map((s) => (
+                  <div key={s.subject_id} style={{ marginBottom:10 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:4 }}>
+                      <span>{s.subject_name}</span>
+                      <span style={{ color:C.muted }}>
+                        {s.total ? `${s.covered}/${s.total} · ${s.percent}%` : "no topics yet"}
+                      </span>
+                    </div>
+                    <ProgressBar percent={s.percent} height={7} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* WEEKLY TIMETABLE GRID */}
         {batch && (

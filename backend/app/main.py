@@ -19,7 +19,9 @@ import uuid
 from pathlib import Path
 app = FastAPI(title="SchedAI API")
 from app.imports import router as import_router
+from app.syllabus import router as syllabus_router, overall_progress
 app.include_router(import_router)
+app.include_router(syllabus_router)
 from fastapi import WebSocket, WebSocketDisconnect
 from app.websocket_manager import manager
 
@@ -2267,19 +2269,9 @@ def get_admin_dashboard_stats():
         batches_with_timetable = cursor.fetchone()["c"]
         batches_without_timetable = max(total_batches - batches_with_timetable, 0)
 
-        cursor.execute(
-            "SELECT total_units, completed_units FROM syllabus_progress"
-        )
-        syllabus_rows = cursor.fetchall()
-        if syllabus_rows:
-            pct_values = [
-                (r["completed_units"] / r["total_units"] * 100)
-                for r in syllabus_rows
-                if r["total_units"]
-            ]
-            avg_syllabus_progress = round(sum(pct_values) / len(pct_values), 1) if pct_values else 0
-        else:
-            avg_syllabus_progress = 0
+        syl = overall_progress(cursor)
+        avg_syllabus_progress = syl["percent"]
+        syllabus_rows = range(syl["tracked"])   # neeche sirf iski length use hoti hai
 
         total_students_with_guide = scalar("SELECT COUNT(DISTINCT student_id) AS c FROM project_guides")
 
@@ -4320,12 +4312,12 @@ def get_holidays():
 def get_holiday_notifications(upcoming_days: int = 7):
     """
     Powers the auto-detect banner on every dashboard:
-      - today: holiday(s) covering today (holiday_date <= today <= end_date,
-               where a single-day holiday's end_date is treated as equal
-               to its holiday_date)
-      - upcoming: holidays whose holiday_date falls in the next
-                  `upcoming_days` days (today's own holidays excluded —
-                  those are already in `today`)
+    - today: holiday(s) covering today (holiday_date <= today <= end_date,
+            where a single-day holiday's end_date is treated as equal
+            to its holiday_date)
+    - upcoming: holidays whose holiday_date falls in the next
+                `upcoming_days` days (today's own holidays excluded —
+                those are already in `today`)
     """
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
@@ -4397,7 +4389,7 @@ async def create_holiday(
 
         holiday_id = cursor.lastrowid
         await create_notification("Holiday Announced", f"{holiday_name} on {holiday_date}",
-                 audience="all", notif_type="info")
+                audience="all", notif_type="info")
 
         return {
             "message": "Holiday created successfully",
@@ -4561,7 +4553,7 @@ async def create_event(
 
         event_id = cursor.lastrowid        
         await create_notification("Event Announced", f"{event_name} on {event_date}",
-                 audience="all", notif_type="info")
+                audience="all", notif_type="info")
                 
 
         return {
@@ -4769,12 +4761,12 @@ def signup_teacher_list():
 def signup(payload: SignupRequest):
     """
     Signup is restricted:
-      - admin   : needs the admin access code (ADMIN_SIGNUP_CODE in .env, if set)
-                  and at most MAX_ADMINS (default 2) admin accounts can exist
-      - teacher : only a teacher the admin already added, and the email must
-                  match the email the admin saved for that teacher
-      - student : only a student the admin already added (roll number), and the
-                  email must match the email the admin saved for that student
+    - admin   : needs the admin access code (ADMIN_SIGNUP_CODE in .env, if set)
+                and at most MAX_ADMINS (default 2) admin accounts can exist
+    - teacher : only a teacher the admin already added, and the email must
+                match the email the admin saved for that teacher
+    - student : only a student the admin already added (roll number), and the
+                email must match the email the admin saved for that student
     """
     name = payload.name.strip()
     email = payload.email.strip().lower()

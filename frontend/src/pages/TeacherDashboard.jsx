@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { ProgressBar, ProgressRing } from "./progressWidgets";
 import HolidayBanner from "./HolidayBanner";
 import NotificationBell from "./NotificationBell";
 
@@ -164,6 +166,22 @@ export default function TeacherDashboard() {
 
   useEffect(() => { fetchAll(); }, []);
 
+  // syllabus progress of the subjects/batches this teacher teaches
+  const [syllabusClasses, setSyllabusClasses] = useState([]);
+  useEffect(() => {
+    if (!user?.access_token) return;
+    fetch(`${API_URL}/syllabus/my-classes`, {
+      headers: { Authorization: `Bearer ${user.access_token}` },
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setSyllabusClasses)
+      .catch(() => {});
+  }, [user]);
+
+  const syllabusTotal   = syllabusClasses.reduce((n, c) => n + c.total, 0);
+  const syllabusCovered = syllabusClasses.reduce((n, c) => n + c.covered, 0);
+  const syllabusPercent = syllabusTotal ? Math.round((syllabusCovered * 1000) / syllabusTotal) / 10 : 0;
+
   const myClasses    = useMemo(() => timetables.filter(t => t.teacher_id === teacherId), [timetables, teacherId]);
   const todaysClasses = useMemo(() =>
     myClasses.filter(t => t.day_of_week === todayName).sort((a,b) => Number(a.start_time) - Number(b.start_time)),
@@ -294,6 +312,42 @@ export default function TeacherDashboard() {
                 </div>
               )}
             </div>
+
+            {/* ── SYLLABUS PROGRESS ── */}
+            {syllabusClasses.length > 0 && (
+              <div style={style.card}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                  <p style={{ ...style.sectionLabel, margin:0 }}>Syllabus Progress</p>
+                  <Link
+                    to="/teacher/syllabus"
+                    style={{ fontSize:13, fontWeight:600, color:C.accent, textDecoration:"none" }}
+                  >
+                    Update topics →
+                  </Link>
+                </div>
+
+                <div style={{ display:"flex", gap:24, alignItems:"center", flexWrap:"wrap" }}>
+                  <ProgressRing percent={syllabusPercent} size={96} sub="your classes" />
+
+                  <div style={{ flex:1, minWidth:260 }}>
+                    {syllabusClasses.map((c) => (
+                      <div key={`${c.subject_id}-${c.batch_id}`} style={{ marginBottom:12 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", gap:12, fontSize:13, marginBottom:4 }}>
+                          <span>
+                            <b>{c.subject_name}</b>
+                            <span style={{ color:C.muted }}> · {c.batch_name}</span>
+                          </span>
+                          <span style={{ color:C.muted, whiteSpace:"nowrap" }}>
+                            {c.total ? `${c.covered}/${c.total} · ${c.percent}%` : "no topics yet"}
+                          </span>
+                        </div>
+                        <ProgressBar percent={c.percent} height={7} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* ── WEEKLY WORKLOAD ── */}
             <div style={style.card}>

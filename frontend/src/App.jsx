@@ -33,6 +33,8 @@ import Profile from "./pages/Profile";
 import Notes from "./pages/Notes";
 import PYQs from "./pages/PYQs";
 import ImportData from "./pages/ImportData";
+import TeacherSyllabus from "./pages/TeacherSyllabus";
+import StudentSyllabus from "./pages/StudentSyllabus";
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // =========================
@@ -525,6 +527,7 @@ function App() {
           }
         >
           <Route path="dashboard" element={<TeacherDashboard />} />
+          <Route path="syllabus" element={<TeacherSyllabus />} />
           <Route path="profile" element={<Profile role="teacher" />} />
         </Route>
 
@@ -538,6 +541,7 @@ function App() {
           }
         >
           <Route path="dashboard" element={<StudentDashboard />} />
+          <Route path="syllabus" element={<StudentSyllabus />} />
           <Route path="profile" element={<Profile role="student" />} />
         </Route>
 

@@ -22,6 +22,7 @@ export default function RoleLayout({ role }) {
 
   const links = [
     { to: `${base}/dashboard`, icon: "🏠", label: "Dashboard" },
+    { to: `${base}/syllabus`, icon: "📖", label: "Syllabus" },
     { to: `${base}/profile`, icon: "👤", label: "Profile" },
   ];
 
