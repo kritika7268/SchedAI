@@ -41,7 +41,7 @@ import TeacherSyllabus from "./pages/TeacherSyllabus";
 import StudentSyllabus from "./pages/StudentSyllabus";
 import AdminSyllabus from "./pages/AdminSyllabus";
 import { BatchBarChart } from "./pages/SyllabusCharts";
-import { ProgressRing } from "./pages/progressWidgets";
+import { ProgressRing } from "./pages/ProgressWidgets";
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // =========================

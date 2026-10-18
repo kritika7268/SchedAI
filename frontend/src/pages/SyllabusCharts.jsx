@@ -3,7 +3,7 @@ import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from "recharts";
-import { progressColor } from "./progressWidgets";
+import { progressColor } from "./ProgressWidgets";
 
 // ── Batch-wise bar chart (Admin dashboard ke liye) ──────────────
 // batches = data.batches  (/syllabus/progress/overview ka response)

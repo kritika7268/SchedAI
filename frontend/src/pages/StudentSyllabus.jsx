@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
-import { ProgressBar, ProgressRing } from "./progressWidgets";
+import { ProgressBar, ProgressRing } from "./ProgressWidgets";
 
 const API_URL = "http://127.0.0.1:8000";
 

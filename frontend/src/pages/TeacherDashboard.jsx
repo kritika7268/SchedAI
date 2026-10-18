@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { ProgressBar, ProgressRing } from "./progressWidgets";
+import { ProgressBar, ProgressRing } from "./ProgressWidgets";
 import HolidayBanner from "./HolidayBanner";
 import NotificationBell from "./NotificationBell";
 import MyProjectStudents from "./MyProjectStudents";
