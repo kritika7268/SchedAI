@@ -21,4 +21,3 @@ ortools
 uvicorn[standard]
 python-dotenv
 mysql-connector-python
-recharts
