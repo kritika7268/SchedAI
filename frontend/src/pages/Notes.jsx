@@ -2,38 +2,47 @@ import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 
 const API_URL = "http://127.0.0.1:8000";
+const MAX_MB = 20;
+
+function checkPdf(file) {
+  if (!file) return "Please choose a PDF file.";
+  if (!file.name.toLowerCase().endsWith(".pdf")) return "Only PDF files are allowed.";
+  if (file.size === 0) return "The selected file is empty.";
+  if (file.size > MAX_MB * 1024 * 1024) return `File is larger than ${MAX_MB} MB.`;
+  return null;
+}
 
 function Notes() {
-  const { user } = useAuth(); // { access_token, role, name, user_id, teacher_id, student_id }
+  const { user } = useAuth();
   const token = user?.access_token;
   const role = user?.role;
 
   const [notes, setNotes] = useState([]);
   const [subjects, setSubjects] = useState([]);
+  const [allSubjects, setAllSubjects] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState(null);
 
-  // Upload form
   const [subjectId, setSubjectId] = useState("");
   const [teacherId, setTeacherId] = useState(role === "teacher" ? String(user?.teacher_id || "") : "");
   const [batchId, setBatchId] = useState("");
-  const [semester, setSemester] = useState(""); // auto-filled from the chosen batch
+  const [semester, setSemester] = useState("");
   const [unit, setUnit] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [file, setFile] = useState(null);
+  const [fileKey, setFileKey] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
+  const [uploadOk, setUploadOk] = useState(null);
 
-  // Filters
   const [filterSubject, setFilterSubject] = useState("");
   const [filterBatch, setFilterBatch] = useState("");
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
-  // ── fetch reference data (no auth needed) + notes (auth needed) ──────────
   const fetchReferenceData = async () => {
     try {
       const [subjectsRes, teachersRes, batchesRes] = await Promise.all([
@@ -41,9 +50,19 @@ function Notes() {
         fetch(`${API_URL}/teachers`),
         fetch(`${API_URL}/batches`),
       ]);
-      setSubjects(subjectsRes.ok ? await subjectsRes.json() : []);
+      const allSubs = subjectsRes.ok ? await subjectsRes.json() : [];
+      setAllSubjects(allSubs);
       setTeachers(teachersRes.ok ? await teachersRes.json() : []);
       setBatches(batchesRes.ok ? await batchesRes.json() : []);
+
+      if (role === "teacher" && user?.teacher_id) {
+        const skillsRes = await fetch(`${API_URL}/teacher-skills?teacher_id=${user.teacher_id}`);
+        const skills = skillsRes.ok ? await skillsRes.json() : [];
+        const mappedIds = new Set(skills.map((s) => s.subject_id));
+        setSubjects(allSubs.filter((s) => mappedIds.has(s.subject_id)));
+      } else {
+        setSubjects(allSubs);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -57,9 +76,7 @@ function Notes() {
       if (filterSubject) params.append("subject_id", filterSubject);
       if (filterBatch) params.append("batch_id", filterBatch);
 
-      const res = await fetch(`${API_URL}/notes?${params.toString()}`, {
-        headers: authHeaders,
-      });
+      const res = await fetch(`${API_URL}/notes?${params.toString()}`, { headers: authHeaders });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Failed to load notes");
@@ -75,6 +92,7 @@ function Notes() {
 
   useEffect(() => {
     fetchReferenceData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -82,7 +100,24 @@ function Notes() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, filterSubject, filterBatch]);
 
-  // ── when a batch is picked, auto-fill its semester (backend requires a match) ──
+  // Batches that match the chosen subject (same semester / department / batch)
+  const selectedSubject = subjects.find((s) => String(s.subject_id) === String(subjectId));
+  const uploadBatches = useMemo(() => {
+    if (!selectedSubject) return [];
+    return batches.filter(
+      (b) =>
+        (selectedSubject.semester == null || Number(b.semester) === Number(selectedSubject.semester)) &&
+        (selectedSubject.department_id == null || b.department_id === selectedSubject.department_id) &&
+        (selectedSubject.batch_id == null || b.batch_id === selectedSubject.batch_id)
+    );
+  }, [batches, selectedSubject]);
+
+  const handleSubjectChange = (id) => {
+    setSubjectId(id);
+    setBatchId("");
+    setSemester("");
+  };
+
   const handleBatchChange = (id) => {
     setBatchId(id);
     const match = batches.find((b) => String(b.batch_id) === String(id));
@@ -98,29 +133,31 @@ function Notes() {
     setTitle("");
     setDescription("");
     setFile(null);
+    setFileKey((k) => k + 1);
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
     setUploadError(null);
+    setUploadOk(null);
 
-    if (!subjectId || !teacherId || !batchId || !semester || !unit.trim() || !title.trim() || !file) {
-      setUploadError("Please fill subject, teacher, batch, unit, title and choose a PDF file.");
+    if (!subjectId || !teacherId || !batchId || !semester || !unit.trim() || !title.trim()) {
+      setUploadError("Please fill subject, teacher, batch, unit and title.");
       return;
     }
-    if (file.type !== "application/pdf") {
-      setUploadError("Only PDF files are allowed.");
+    const fileProblem = checkPdf(file);
+    if (fileProblem) {
+      setUploadError(fileProblem);
       return;
     }
 
     try {
       setUploading(true);
-
       const params = new URLSearchParams({
         subject_id: subjectId,
         teacher_id: teacherId,
         batch_id: batchId,
-        semester: semester,
+        semester,
         unit: unit.trim(),
         title: title.trim(),
       });
@@ -131,16 +168,16 @@ function Notes() {
 
       const res = await fetch(`${API_URL}/notes/upload?${params.toString()}`, {
         method: "POST",
-        headers: authHeaders, // do NOT set Content-Type — browser sets the multipart boundary
+        headers: authHeaders,
         body: formData,
       });
-
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Upload failed");
+        throw new Error(typeof err.detail === "string" ? err.detail : "Upload failed");
       }
 
       resetForm();
+      setUploadOk("Note uploaded successfully.");
       await fetchNotes();
     } catch (e) {
       setUploadError(e.message || "Could not upload note");
@@ -149,13 +186,9 @@ function Notes() {
     }
   };
 
-  // Download requires the Bearer token, so a plain <a href> won't work —
-  // fetch the PDF as a blob and trigger the save from memory.
   const handleDownload = async (noteId, fileName) => {
     try {
-      const res = await fetch(`${API_URL}/notes/${noteId}/download`, {
-        headers: authHeaders,
-      });
+      const res = await fetch(`${API_URL}/notes/${noteId}/download`, { headers: authHeaders });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Download failed");
@@ -174,7 +207,25 @@ function Notes() {
     }
   };
 
-  const visibleNotes = useMemo(() => notes, [notes]); // filtering already done server-side
+  const canDelete = (note) => {
+    if (role === "admin") return true;
+    if (role === "teacher" && note.uploaded_by === user?.user_id) return true;
+    return false;
+  };
+
+  const handleDelete = async (noteId) => {
+    if (!window.confirm("Delete this note? This cannot be undone.")) return;
+    try {
+      const res = await fetch(`${API_URL}/notes/${noteId}`, { method: "DELETE", headers: authHeaders });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Delete failed");
+      }
+      await fetchNotes();
+    } catch (e) {
+      alert(e.message || "Could not delete note");
+    }
+  };
 
   if (!token) {
     return (
@@ -187,9 +238,14 @@ function Notes() {
   return (
     <div style={{ padding: "30px", maxWidth: "1100px", margin: "0 auto" }}>
       <h1>Notes</h1>
-      <p>Upload and browse academic notes by subject, batch, and unit.</p>
+      <p>
+        {role === "student"
+          ? "Download notes for your batch. Students can only view and download."
+          : role === "teacher"
+          ? "Upload notes for your own subjects, and manage the notes you uploaded."
+          : "Upload, download and manage notes for all batches."}
+      </p>
 
-      {/* UPLOAD FORM — admin/teacher only; backend also enforces this */}
       {(role === "admin" || role === "teacher") && (
         <form
           onSubmit={handleUpload}
@@ -201,8 +257,10 @@ function Notes() {
         >
           <h2 style={{ margin: 0 }}>Upload Note</h2>
 
-          <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={{ padding: "10px" }}>
-            <option value="">Select Subject</option>
+          <select value={subjectId} onChange={(e) => handleSubjectChange(e.target.value)} style={{ padding: "10px" }}>
+            <option value="">
+              {role === "teacher" && subjects.length === 0 ? "No subjects mapped to you yet" : "Select Subject"}
+            </option>
             {subjects.map((s) => (
               <option key={s.subject_id} value={s.subject_id}>
                 {s.subject_name} ({s.subject_code})
@@ -224,9 +282,14 @@ function Notes() {
           )}
 
           <div style={{ display: "flex", gap: "12px" }}>
-            <select value={batchId} onChange={(e) => handleBatchChange(e.target.value)} style={{ padding: "10px", flex: 1 }}>
-              <option value="">Select Batch</option>
-              {batches.map((b) => (
+            <select
+              value={batchId}
+              onChange={(e) => handleBatchChange(e.target.value)}
+              disabled={!subjectId}
+              style={{ padding: "10px", flex: 1 }}
+            >
+              <option value="">{subjectId ? "Select Batch" : "Select a subject first"}</option>
+              {uploadBatches.map((b) => (
                 <option key={b.batch_id} value={b.batch_id}>
                   {b.batch_name}{b.section ? ` (${b.section})` : ""} — Sem {b.semester}
                 </option>
@@ -239,37 +302,52 @@ function Notes() {
               style={{ padding: "10px", flex: 1, background: "#f3f4f6", color: "#6b7280" }}
             />
           </div>
+          {subjectId && uploadBatches.length === 0 && (
+            <div style={{ fontSize: 13, color: "#92400e" }}>
+              No batch matches this subject's semester. Check the subject and batch setup.
+            </div>
+          )}
 
           <input
             type="text" value={unit} onChange={(e) => setUnit(e.target.value)}
-            placeholder="Unit (e.g. Unit 3)"
-            style={{ padding: "10px" }}
+            placeholder="Unit (e.g. Unit 3)" style={{ padding: "10px" }}
           />
-
           <input
             type="text" value={title} onChange={(e) => setTitle(e.target.value)}
-            placeholder="Title (e.g. Normalization in DBMS)"
-            style={{ padding: "10px" }}
+            placeholder="Title (e.g. Normalization in DBMS)" style={{ padding: "10px" }}
           />
-
           <textarea
             value={description} onChange={(e) => setDescription(e.target.value)}
-            placeholder="Description (optional)"
-            style={{ padding: "10px" }}
+            placeholder="Description (optional)" style={{ padding: "10px" }}
           />
 
           <label>
-            PDF File
+            PDF File (max {MAX_MB} MB)
             <input
-              type="file" accept="application/pdf"
-              onChange={(e) => setFile(e.target.files[0] || null)}
+              key={fileKey}
+              type="file" accept="application/pdf,.pdf"
+              onChange={(e) => {
+                const f = e.target.files[0] || null;
+                setFile(f);
+                setUploadError(f ? checkPdf(f) : null);
+              }}
               style={{ display: "block", marginTop: "6px" }}
             />
           </label>
+          {file && !checkPdf(file) && (
+            <div style={{ fontSize: 13, color: "#166534" }}>
+              ✓ {file.name} ({(file.size / (1024 * 1024)).toFixed(2)} MB)
+            </div>
+          )}
 
           {uploadError && (
             <div style={{ padding: "10px 14px", borderRadius: 6, background: "#fee2e2", color: "#991b1b", fontSize: 13 }}>
               {uploadError}
+            </div>
+          )}
+          {uploadOk && (
+            <div style={{ padding: "10px 14px", borderRadius: 6, background: "#dcfce7", color: "#166534", fontSize: 13 }}>
+              {uploadOk}
             </div>
           )}
 
@@ -289,7 +367,7 @@ function Notes() {
       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "16px" }}>
         <select value={filterSubject} onChange={(e) => setFilterSubject(e.target.value)} style={{ padding: "8px" }}>
           <option value="">All Subjects</option>
-          {subjects.map((s) => (
+          {(role === "teacher" ? subjects : allSubjects).map((s) => (
             <option key={s.subject_id} value={s.subject_id}>{s.subject_name}</option>
           ))}
         </select>
@@ -310,11 +388,11 @@ function Notes() {
         <p>Loading notes...</p>
       ) : listError ? (
         <p style={{ color: "#991b1b" }}>{listError}</p>
-      ) : visibleNotes.length === 0 ? (
+      ) : notes.length === 0 ? (
         <p>No notes found.</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          {visibleNotes.map((n) => (
+          {notes.map((n) => (
             <div
               key={n.note_id}
               style={{
@@ -325,17 +403,30 @@ function Notes() {
             >
               <div>
                 <strong>{n.title}</strong>
+                {n.unit && <span style={{ color: "#6b7280" }}> — {n.unit}</span>}
                 <div style={{ fontSize: "13px", color: "#6b7280", marginTop: "2px" }}>
                   {n.subject_name} ({n.subject_code})
+                  {n.semester && ` · Sem ${n.semester}`}
                   {n.batch_name && ` · ${n.batch_name}${n.section ? ` (${n.section})` : ""}`}
+                  {n.teacher_name && ` · by ${n.teacher_name}`}
                 </div>
                 {n.description && (
                   <div style={{ fontSize: "13px", color: "#374151", marginTop: "4px" }}>{n.description}</div>
                 )}
               </div>
-              <button onClick={() => handleDownload(n.note_id, n.file_name)} style={{ padding: "8px 14px" }}>
-                ⬇️ Download
-              </button>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button onClick={() => handleDownload(n.note_id, n.file_name)} style={{ padding: "8px 14px" }}>
+                  ⬇️ Download
+                </button>
+                {canDelete(n) && (
+                  <button
+                    onClick={() => handleDelete(n.note_id)}
+                    style={{ padding: "8px 14px", color: "#991b1b", borderColor: "#fecaca" }}
+                  >
+                    🗑️ Delete
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>

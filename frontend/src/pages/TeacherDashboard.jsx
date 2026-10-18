@@ -4,6 +4,9 @@ import { useAuth } from "../auth/AuthContext";
 import { ProgressBar, ProgressRing } from "./progressWidgets";
 import HolidayBanner from "./HolidayBanner";
 import NotificationBell from "./NotificationBell";
+import MyProjectStudents from "./MyProjectStudents";
+import MyExams from "./MyExams";
+import { useExamWeek, ExamWeekBanner } from "./ExamWeek";
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -133,7 +136,8 @@ const style = {
 export default function TeacherDashboard() {
   const { user } = useAuth();
   const teacherId = user?.teacher_id;
-
+  const examWeek = useExamWeek();
+  const classesSuspended = !!examWeek?.active;
   const [timetables, setTimetables] = useState([]);
   const [absences,   setAbsences]   = useState([]);
   const [loading,    setLoading]     = useState(true);
@@ -183,9 +187,9 @@ export default function TeacherDashboard() {
   const syllabusPercent = syllabusTotal ? Math.round((syllabusCovered * 1000) / syllabusTotal) / 10 : 0;
 
   const myClasses    = useMemo(() => timetables.filter(t => t.teacher_id === teacherId), [timetables, teacherId]);
-  const todaysClasses = useMemo(() =>
-    myClasses.filter(t => t.day_of_week === todayName).sort((a,b) => Number(a.start_time) - Number(b.start_time)),
-  [myClasses, todayName]);
+    const todaysClasses = useMemo(() =>
+    myClasses.filter(t => !classesSuspended && t.day_of_week === todayName).sort((a,b) => Number(a.start_time) - Number(b.start_time)),
+  [myClasses, todayName, classesSuspended]);
 
   const workloadByDay = useMemo(() => {
     const counts = {};
@@ -252,6 +256,7 @@ export default function TeacherDashboard() {
 
         {/* ── HOLIDAY NOTIFICATIONS ── */}
         <HolidayBanner />
+        <ExamWeekBanner week={examWeek} />
 
         {loading ? (
           <div style={{ color:C.muted, fontSize:15, paddingTop:40, textAlign:"center" }}>
@@ -312,7 +317,9 @@ export default function TeacherDashboard() {
                 </div>
               )}
             </div>
-
+            <MyExams />
+            {/* ── PROJECT STUDENTS ── */}
+            <MyProjectStudents />
             {/* ── SYLLABUS PROGRESS ── */}
             {syllabusClasses.length > 0 && (
               <div style={style.card}>

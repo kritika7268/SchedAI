@@ -1,3 +1,6 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import get_db_connection
@@ -6,8 +9,8 @@ from fastapi.concurrency import run_in_threadpool
 from app.substitute_engine import auto_assign_substitutes
 from typing import Optional
 from datetime import datetime, timedelta
-from pydantic import BaseModel, EmailStr 
-from app.auth import hash_password, verify_password, create_access_token, get_current_user, require_role 
+from pydantic import BaseModel, EmailStr, Field
+from app.auth import (hash_password,verify_password,create_access_token,get_current_user,require_role,create_password_reset_token,_hash_reset_token,get_valid_password_reset_token,mark_password_reset_token_used,)
 from fastapi import Depends
 from fastapi import UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
@@ -16,6 +19,16 @@ import io
 import re
 import os
 import uuid
+
+import smtplib
+import secrets
+import hmac
+import hashlib
+
+from email.message import EmailMessage
+
+from datetime import datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
 app = FastAPI(title="SchedAI API")
 from app.imports import router as import_router
@@ -24,6 +37,77 @@ app.include_router(import_router)
 app.include_router(syllabus_router)
 from fastapi import WebSocket, WebSocketDisconnect
 from app.websocket_manager import manager
+from app.project_guides import (
+    router as project_guides_router,
+    auto_assign_for_batch,
+    project_type_for,
+)
+app.include_router(project_guides_router)
+from app.file_checks import (
+    read_valid_pdf, save_pdf,
+    check_subject_matches_batch, check_teacher_owns_subject,
+)
+
+from app.exams import router as exams_router, exam_week_containing
+app.include_router(exams_router)
+
+# ============================================================
+# PASSWORD RESET OTP REQUEST MODEL
+# ============================================================
+
+class ResetPasswordOTPRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=8, max_length=128)
+
+def hash_reset_otp(otp: str) -> str:
+    secret = os.getenv("RESET_OTP_SECRET")
+
+    if not secret:
+        raise RuntimeError("RESET_OTP_SECRET is not configured")
+
+    return hmac.new(
+        secret.encode("utf-8"),
+        otp.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+
+
+def send_reset_otp_email(email: str, name: str, otp: str):
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    if not all([
+        smtp_host,
+        smtp_username,
+        smtp_password,
+        os.getenv("RESET_OTP_SECRET"),
+    ]):
+        raise RuntimeError("SMTP or OTP environment settings are missing")
+
+    message = EmailMessage()
+    message["Subject"] = "SchedAI Password Reset OTP"
+    message["From"] = smtp_username
+    message["To"] = email
+
+    message.set_content(
+        f"""Hello {name},
+
+Your SchedAI password reset OTP is: {otp}
+
+This OTP expires in 10 minutes.
+If you did not request a password reset, you can ignore this email.
+
+SchedAI Support
+"""
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+        server.starttls()
+        server.login(smtp_username, smtp_password)
+        server.send_message(message)    
 
 
 def _normalize_time_str(value):
@@ -132,10 +216,27 @@ async def websocket_notifications(websocket: WebSocket, role: str = "all"):
 # NOTES & PYQ FILE STORAGE
 # ============================================================      
 
-NOTES_UPLOAD_DIR = Path("uploads/notes")
-PYQS_UPLOAD_DIR = Path("uploads/pyqs")
+# Always relative to the backend folder, not to where the server was started
+BASE_DIR = Path(__file__).resolve().parent.parent
+NOTES_UPLOAD_DIR = BASE_DIR / "uploads" / "notes"
+PYQS_UPLOAD_DIR = BASE_DIR / "uploads" / "pyqs"
 NOTES_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PYQS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+def _teacher_subject_ids(cursor, teacher_id):
+    cursor.execute("SELECT subject_id FROM teacher_skills WHERE teacher_id = %s", (teacher_id,))
+    return [r["subject_id"] for r in cursor.fetchall()]
+
+
+def _resolve_stored_file(stored_path: str, root: Path):
+    """Find the saved PDF by its file name, however the old path was stored."""
+    name = Path((stored_path or "").replace("\\", "/")).name
+    candidate = root / name
+    if candidate.is_file():
+        return candidate
+    legacy = Path(stored_path or "")
+    if legacy.is_file():
+        return legacy.resolve()
+    return None
  
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
 MAX_UPLOAD_SIZE_MB = 20
@@ -616,6 +717,38 @@ def delete_subject(subject_id: int):
             detail=str(e)
         )
 
+    finally:
+        cursor.close()
+        connection.close()
+
+
+# No auth required — same pattern as /subjects, /teachers, /batches
+# (read-only reference data).
+
+@app.get("/teacher-skills")
+def get_teacher_skills(teacher_id: Optional[int] = None):
+    """
+    Returns subject mappings. Pass teacher_id to get just one teacher's
+    eligible subjects — used by the Notes/PYQ upload forms so a teacher
+    only sees the subjects they're actually allowed to upload for.
+    """
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        query = """
+            SELECT ts.teacher_id, ts.subject_id, s.subject_name, s.subject_code
+            FROM teacher_skills ts
+            JOIN subjects s ON ts.subject_id = s.subject_id
+            WHERE 1=1
+        """
+        params = []
+        if teacher_id is not None:
+            query += " AND ts.teacher_id = %s"
+            params.append(teacher_id)
+        query += " ORDER BY s.subject_name"
+
+        cursor.execute(query, tuple(params))
+        return cursor.fetchall()
     finally:
         cursor.close()
         connection.close()
@@ -2097,6 +2230,14 @@ def _generate_one_batch_sync(batch_id: int, auto_publish: bool, time_limit_secon
         ins.close()
         connection.commit()
 
+        # BCA Sem 5 / Sem 6 ke students ko guides mein barabar baanto.
+        # Fail ho to bhi timetable save rehta hai.
+        try:
+            result["guides"] = auto_assign_for_batch(connection, batch_id)
+        except Exception as guide_error:
+            print("Project guide auto-assign failed:", guide_error)
+            result["guides"] = None
+
         result["status_saved"] = status
         result["batch_name"] = b["batch_name"]
         return result
@@ -2143,6 +2284,7 @@ async def generate_timetable_endpoint(
         "sessions_created": len(result["schedule"]),
         "conflicts": stats["conflicts"],
         "stats": {"optimal": stats["optimal"], "solve_seconds": stats["solve_seconds"]},
+        "project_guides": result.get("guides"),
     }
 
 @app.get("/teacher-workload")
@@ -2225,6 +2367,9 @@ def get_admin_dashboard_stats():
             "SELECT COUNT(*) AS c FROM timetables WHERE day_of_week = %s",
             (today_day_name,)
         )
+        classes_suspended = bool(exam_week_containing(cursor, today.date()))
+        if classes_suspended:
+            todays_classes = 0
 
         cursor.execute(
             """
@@ -2274,10 +2419,17 @@ def get_admin_dashboard_stats():
         syllabus_rows = range(syl["tracked"])   # neeche sirf iski length use hoti hai
 
         total_students_with_guide = scalar("SELECT COUNT(DISTINCT student_id) AS c FROM project_guides")
+        cursor.execute(
+            "SELECT b.batch_name, b.semester FROM students s "
+            "JOIN batches b ON s.batch_id = b.batch_id")
+        eligible_total = sum(
+            1 for r in cursor.fetchall()
+            if project_type_for(r["batch_name"], r["semester"]))
 
         return {
             "generated_at": today.strftime("%Y-%m-%d %H:%M:%S"),
             "today_day_name": today_day_name,
+                        "classes_suspended": classes_suspended,
             "totals": {
                 "teachers": total_teachers,
                 "students": total_students,
@@ -2303,7 +2455,7 @@ def get_admin_dashboard_stats():
             },
             "project_guides": {
                 "students_with_guide": total_students_with_guide,
-                "students_total": total_students,
+                "students_total": eligible_total,
             },
         }
 
@@ -2534,6 +2686,26 @@ async def auto_substitute(teacher_id: int, absence_date: str, reason: str = "Not
         connection.commit()
         absence_id = cursor.lastrowid
 
+        # Classes are suspended in the exam week, so no class substitute is needed
+        if exam_week_containing(cursor, parsed_date.date()):
+            cursor.execute(
+                "SELECT COUNT(*) AS c FROM exam_schedule "
+                "WHERE invigilator_id = %s AND exam_date = %s",
+                (teacher_id, absence_date))
+            duties = cursor.fetchone()["c"]
+            note = (
+                f" {absent_teacher['teacher_name']} has {duties} exam duty slot(s) that day. "
+                "Please change the invigilator on the Exam Timetable page."
+            ) if duties else ""
+            return {
+                "message": "Absence recorded. Classes are suspended during the exam week, "
+                        "so no class substitute is needed." + note,
+                "absence_id": absence_id,
+                "day_of_week": day_of_week,
+                "assigned": [],
+                "unassigned": [],
+            }
+        
         # 3. Affected classes: everything this teacher teaches on that
         #    weekday, with the subject's department for skill-matching.
         cursor.execute(
@@ -2877,88 +3049,101 @@ def get_notes(
 ):
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
-
     try:
         role = str(current_user.get("role", "")).lower()
-
         if role not in ("admin", "teacher", "student"):
-            raise HTTPException(
-                status_code=403,
-                detail="You are not authorized to view notes"
-            )
+            raise HTTPException(status_code=403, detail="You are not authorized to view notes")
 
-        # Students can see ONLY their own batch notes.
+        allowed_subjects = None
+
         if role == "student":
-
             student_id = current_user.get("student_id")
-
             if not student_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Student account is not linked to a student record"
-                )
-
-            cursor.execute(
-                """
-                SELECT batch_id
-                FROM students
-                WHERE student_id = %s
-                """,
-                (student_id,)
-            )
-
+                raise HTTPException(status_code=403, detail="Student account is not linked to a student record")
+            cursor.execute("SELECT batch_id FROM students WHERE student_id = %s", (student_id,))
             student = cursor.fetchone()
-
             if not student:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Student record not found"
-                )
-
+                raise HTTPException(status_code=404, detail="Student record not found")
             batch_id = student["batch_id"]
 
+        elif role == "teacher":
+            tid = current_user.get("teacher_id")
+            if not tid:
+                raise HTTPException(status_code=403, detail="Teacher account is not linked to a teacher record")
+            allowed_subjects = _teacher_subject_ids(cursor, tid)
+            if not allowed_subjects:
+                return []
+
         query = """
-            SELECT
-                n.note_id,
-                n.subject_id,
-                s.subject_name,
-                s.subject_code,
-                n.batch_id,
-                b.batch_name,
-                b.section,
-                n.title,
-                n.description,
-                n.file_name,
-                n.file_path,
-                n.uploaded_by,
-                n.uploaded_at
+            SELECT n.note_id, n.subject_id, s.subject_name, s.subject_code,
+                   n.teacher_id, t.teacher_name, n.batch_id, b.batch_name, b.section,
+                   n.semester, n.unit, n.title, n.description, n.file_name,
+                   n.uploaded_by, n.uploaded_at
             FROM notes n
-            JOIN subjects s
-                ON n.subject_id = s.subject_id
-            JOIN batches b
-                ON n.batch_id = b.batch_id
+            JOIN subjects s ON n.subject_id = s.subject_id
+            JOIN teachers t ON n.teacher_id = t.teacher_id
+            JOIN batches b ON n.batch_id = b.batch_id
             WHERE 1 = 1
         """
-
         params = []
 
+        if allowed_subjects is not None:
+            query += " AND n.subject_id IN (" + ",".join(["%s"] * len(allowed_subjects)) + ")"
+            params.extend(allowed_subjects)
         if batch_id is not None:
             query += " AND n.batch_id = %s"
             params.append(batch_id)
-
         if subject_id is not None:
             query += " AND n.subject_id = %s"
             params.append(subject_id)
 
-        query += """
-            ORDER BY
-                n.uploaded_at DESC,
-                n.title ASC
-        """
-
+        query += " ORDER BY n.uploaded_at DESC, n.title ASC"
         cursor.execute(query, tuple(params))
         return cursor.fetchall()
+    finally:
+        cursor.close()
+        connection.close()
 
+
+@app.get("/notes/{note_id}/download")
+def download_note(note_id: int, current_user: dict = Depends(get_current_user)):
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        role = str(current_user.get("role", "")).lower()
+        if role not in ("admin", "teacher", "student"):
+            raise HTTPException(status_code=403, detail="You are not authorized to download notes")
+
+        cursor.execute(
+            "SELECT note_id, subject_id, batch_id, file_name, file_path FROM notes WHERE note_id = %s",
+            (note_id,))
+        note = cursor.fetchone()
+        if not note:
+            raise HTTPException(status_code=404, detail="This note no longer exists in the database")
+
+        if role == "student":
+            student_id = current_user.get("student_id")
+            if not student_id:
+                raise HTTPException(status_code=403, detail="Student account is not linked to a student record")
+            cursor.execute("SELECT batch_id FROM students WHERE student_id = %s", (student_id,))
+            student = cursor.fetchone()
+            if not student:
+                raise HTTPException(status_code=404, detail="Student record not found")
+            if student["batch_id"] != note["batch_id"]:
+                raise HTTPException(status_code=403, detail="You cannot access this note")
+
+        elif role == "teacher":
+            tid = current_user.get("teacher_id")
+            if not tid or note["subject_id"] not in _teacher_subject_ids(cursor, tid):
+                raise HTTPException(status_code=403, detail="This note is not for one of your subjects")
+
+        path = _resolve_stored_file(note["file_path"], NOTES_UPLOAD_DIR)
+        if not path:
+            raise HTTPException(
+                status_code=404,
+                detail="The PDF file is missing on the server. Please upload this note again.")
+
+        return FileResponse(path=str(path), media_type="application/pdf", filename=note["file_name"])
     finally:
         cursor.close()
         connection.close()
@@ -2976,172 +3161,70 @@ async def upload_note(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
+    role = str(current_user.get("role", "")).lower()
+
+    if role not in ("admin", "teacher"):
+        raise HTTPException(status_code=403, detail="Only Admin or Teacher can upload notes")
+    if not unit.strip() or not title.strip():
+        raise HTTPException(status_code=400, detail="Unit and title are required")
+
+    # check the file first (type, size, real PDF)
+    original_filename, file_content = await read_valid_pdf(file)
+
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
+    stored_path = None
 
     try:
-        role = str(current_user.get("role", "")).lower()
-
-        # Only Admin and Teacher can upload notes.
-        if role not in ("admin", "teacher"):
-            raise HTTPException(
-                status_code=403,
-                detail="Only Admin or Teacher can upload notes"
-            )
-
-        if not file.filename:
-            raise HTTPException(
-                status_code=400,
-                detail="No file selected"
-            )
-
-        original_filename = Path(file.filename).name
-
-        if Path(original_filename).suffix.lower() != ".pdf":
-            raise HTTPException(
-                status_code=400,
-                detail="Only PDF files are allowed"
-            )
-
-        # Check subject.
-        cursor.execute(
-            """
-            SELECT subject_id
-            FROM subjects
-            WHERE subject_id = %s
-            """,
-            (subject_id,)
-        )
-
-        subject = cursor.fetchone()
-
-        if not subject:
-            raise HTTPException(
-                status_code=404,
-                detail="Subject not found"
-            )
-
-        # Check batch.
-        cursor.execute(
-            """
-            SELECT batch_id, semester
-            FROM batches
-            WHERE batch_id = %s
-            """,
-            (batch_id,)
-        )
-        batch = cursor.fetchone()
-
-        if not batch:
-            raise HTTPException(
-                status_code=404,
-                detail="Batch not found"
-            )
+        _, batch = check_subject_matches_batch(cursor, subject_id, batch_id)
 
         if int(batch["semester"]) != int(semester):
             raise HTTPException(
                 status_code=400,
-                detail="Selected semester does not match the selected batch"
-            )
+                detail="Selected semester does not match the selected batch")
 
-        # If teacher is uploading, verify they are eligible for the subject.
         if role == "teacher":
-
             logged_teacher_id = current_user.get("teacher_id")
-
             if not logged_teacher_id:
                 raise HTTPException(
                     status_code=403,
-                    detail="Teacher account is not linked to a teacher record"
-                )
-
+                    detail="Teacher account is not linked to a teacher record")
             if int(teacher_id) != int(logged_teacher_id):
                 raise HTTPException(
                     status_code=403,
-                    detail="You can upload notes only under your own teacher account"
-                )
-
-            cursor.execute(
-                """
-                SELECT 1
-                FROM teacher_skills
-                WHERE teacher_id = %s
-                AND subject_id = %s
-                """,
-                (logged_teacher_id, subject_id)
-            )
-
+                    detail="You can upload notes only under your own teacher account")
+            check_teacher_owns_subject(cursor, logged_teacher_id, subject_id)
+        else:
+            cursor.execute("SELECT 1 FROM teachers WHERE teacher_id = %s", (teacher_id,))
             if not cursor.fetchone():
-                raise HTTPException(
-                status_code=403,
-                detail="You are not mapped to this subject"
-            )
+                raise HTTPException(status_code=404, detail="Teacher not found")
 
-        file_content = await file.read()
-
-        if not file_content:
-            raise HTTPException(
-                status_code=400,
-                detail="Uploaded PDF is empty"
-            )
-
-        # Unique filename prevents accidental overwriting.
-        stored_filename = (
-            f"{uuid.uuid4().hex}_{original_filename}"
-        )
-
-        stored_path = NOTES_UPLOAD_DIR / stored_filename
-
-        with open(stored_path, "wb") as output_file:
-            output_file.write(file_content)
-
-        uploaded_by = current_user.get("user_id")
+        stored_path = save_pdf(file_content, NOTES_UPLOAD_DIR)
 
         cursor_insert = connection.cursor()
-
         try:
             cursor_insert.execute(
-            """
-            INSERT INTO notes
-            (
-                subject_id,
-                teacher_id,
-                batch_id,
-                semester,
-                unit,
-                title,
-                description,
-                file_name,
-                file_path,
-                uploaded_by
+                """
+                INSERT INTO notes
+                (subject_id, teacher_id, batch_id, semester, unit, title,
+                 description, file_name, file_path, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    subject_id, teacher_id, batch_id, semester,
+                    unit.strip(), title.strip(),
+                    description.strip() if description else None,
+                    original_filename, str(stored_path),
+                    current_user.get("user_id"),
+                )
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                subject_id,
-                teacher_id,
-                batch_id,
-                semester,
-                unit.strip(),
-                title.strip(),
-                description.strip() if description else None,
-                original_filename,
-                str(stored_path),
-                uploaded_by
-            )
-        )
             connection.commit()
-
             note_id = cursor_insert.lastrowid
-
         except Exception:
             connection.rollback()
-
-            if stored_path.exists():
+            if stored_path and stored_path.exists():
                 stored_path.unlink()
-
             raise
-
         finally:
             cursor_insert.close()
 
@@ -3151,121 +3234,72 @@ async def upload_note(
             "subject_id": subject_id,
             "batch_id": batch_id,
             "title": title.strip(),
-            "file_name": original_filename
+            "file_name": original_filename,
         }
 
     except HTTPException:
         raise
-
     except Exception as e:
         connection.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         cursor.close()
         connection.close()
 
-
-@app.get("/notes/{note_id}/download")
-def download_note(
+        
+@app.delete("/notes/{note_id}")
+def delete_note(
     note_id: int,
     current_user: dict = Depends(get_current_user)
 ):
+    """
+    Admin can delete any note. A teacher can delete only the notes
+    they uploaded themselves.
+    """
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
-
+ 
     try:
         role = str(current_user.get("role", "")).lower()
-
-        if role not in ("admin", "teacher", "student"):
+ 
+        if role not in ("admin", "teacher"):
             raise HTTPException(
                 status_code=403,
-                detail="You are not authorized to download notes"
+                detail="Only Admin or Teacher can delete notes"
             )
-
+ 
         cursor.execute(
-            """
-            SELECT
-                n.teacher_id,
-                t.teacher_name,
-                n.batch_id,
-                b.batch_name,
-                b.section,
-                n.semester,
-                n.unit,
-                n.title,
-                n.description,
-                n.file_name,
-                n.file_path,
-                n.uploaded_by,
-                n.uploaded_at
-            FROM notes n
-            WHERE n.note_id = %s
-            """,
+            "SELECT uploaded_by, file_path FROM notes WHERE note_id = %s",
             (note_id,)
         )
-
         note = cursor.fetchone()
-
+ 
         if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+ 
+        if role == "teacher" and note["uploaded_by"] != current_user.get("user_id"):
             raise HTTPException(
-                status_code=404,
-                detail="Note not found"
+                status_code=403,
+                detail="You can only delete notes you uploaded yourself"
             )
-
-        # Student can download only their own batch notes.
-        if role == "student":
-
-            student_id = current_user.get("student_id")
-
-            cursor.execute(
-                """
-                SELECT batch_id
-                FROM students
-                WHERE student_id = %s
-                """,
-                (student_id,)
-            )
-
-            student = cursor.fetchone()
-
-            if not student:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Student record not found"
-                )
-
-            if student["batch_id"] != note["batch_id"]:
-                raise HTTPException(
-                    status_code=403,
-                    detail="You cannot access this note"
-                )
-
-        file_path = Path(note["file_path"]).resolve()
-        upload_root = NOTES_UPLOAD_DIR.resolve()
-
-        # Prevent paths outside the notes folder.
-        if upload_root not in file_path.parents:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid file path"
-            )
-
-        if not file_path.is_file():
-            raise HTTPException(
-                status_code=404,
-                detail="Note PDF file not found"
-            )
-
-        return FileResponse(
-            path=str(file_path),
-            media_type="application/pdf",
-            filename=note["file_name"]
-        )
-
+ 
+        delete_cursor = connection.cursor()
+        delete_cursor.execute("DELETE FROM notes WHERE note_id = %s", (note_id,))
+        connection.commit()
+        delete_cursor.close()
+ 
+        file_path = _resolve_stored_file(note["file_path"], NOTES_UPLOAD_DIR)
+        if file_path:
+            file_path.unlink()
+ 
+        return {"message": "Note deleted successfully", "note_id": note_id}
+ 
+    except HTTPException:
+        connection.rollback()
+        raise
+    except Exception as e:
+        connection.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         cursor.close()
         connection.close()
@@ -3284,94 +3318,102 @@ def get_pyqs(
 ):
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
-
     try:
         role = str(current_user.get("role", "")).lower()
-
         if role not in ("admin", "teacher", "student"):
-            raise HTTPException(
-                status_code=403,
-                detail="You are not authorized to view PYQs"
-            )
+            raise HTTPException(status_code=403, detail="You are not authorized to view PYQs")
 
-        # Students can see ONLY their own batch PYQs.
+        allowed_subjects = None
+
         if role == "student":
-
             student_id = current_user.get("student_id")
-
             if not student_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Student account is not linked to a student record"
-                )
-
-            cursor.execute(
-                """
-                SELECT batch_id
-                FROM students
-                WHERE student_id = %s
-                """,
-                (student_id,)
-            )
-
+                raise HTTPException(status_code=403, detail="Student account is not linked to a student record")
+            cursor.execute("SELECT batch_id FROM students WHERE student_id = %s", (student_id,))
             student = cursor.fetchone()
-
             if not student:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Student record not found"
-                )
-
+                raise HTTPException(status_code=404, detail="Student record not found")
             batch_id = student["batch_id"]
 
+        elif role == "teacher":
+            tid = current_user.get("teacher_id")
+            if not tid:
+                raise HTTPException(status_code=403, detail="Teacher account is not linked to a teacher record")
+            allowed_subjects = _teacher_subject_ids(cursor, tid)
+            if not allowed_subjects:
+                return []
+
         query = """
-            SELECT
-                p.pyq_id,
-                p.subject_id,
-                s.subject_name,
-                s.subject_code,
-                p.batch_id,
-                b.batch_name,
-                b.section,
-                p.title,
-                p.exam_year,
-                p.description,
-                p.file_name,
-                p.file_path,
-                p.uploaded_by,
-                p.uploaded_at
+            SELECT p.pyq_id, p.subject_id, s.subject_name, s.subject_code,
+                   p.batch_id, b.batch_name, b.section, p.title, p.exam_year,
+                   p.description, p.file_name, p.uploaded_by, p.uploaded_at
             FROM pyqs p
-            JOIN subjects s
-                ON p.subject_id = s.subject_id
-            JOIN batches b
-                ON p.batch_id = b.batch_id
+            JOIN subjects s ON p.subject_id = s.subject_id
+            JOIN batches b ON p.batch_id = b.batch_id
             WHERE 1 = 1
         """
-
         params = []
 
+        if allowed_subjects is not None:
+            query += " AND p.subject_id IN (" + ",".join(["%s"] * len(allowed_subjects)) + ")"
+            params.extend(allowed_subjects)
         if batch_id is not None:
             query += " AND p.batch_id = %s"
             params.append(batch_id)
-
         if subject_id is not None:
             query += " AND p.subject_id = %s"
             params.append(subject_id)
-
         if exam_year is not None:
             query += " AND p.exam_year = %s"
             params.append(exam_year)
 
-        query += """
-            ORDER BY
-                p.exam_year DESC,
-                p.uploaded_at DESC,
-                p.title ASC
-        """
-
+        query += " ORDER BY p.exam_year DESC, p.uploaded_at DESC, p.title ASC"
         cursor.execute(query, tuple(params))
         return cursor.fetchall()
+    finally:
+        cursor.close()
+        connection.close()
 
+
+@app.get("/pyqs/{pyq_id}/download")
+def download_pyq(pyq_id: int, current_user: dict = Depends(get_current_user)):
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        role = str(current_user.get("role", "")).lower()
+        if role not in ("admin", "teacher", "student"):
+            raise HTTPException(status_code=403, detail="You are not authorized to download PYQs")
+
+        cursor.execute(
+            "SELECT pyq_id, subject_id, batch_id, file_name, file_path FROM pyqs WHERE pyq_id = %s",
+            (pyq_id,))
+        pyq = cursor.fetchone()
+        if not pyq:
+            raise HTTPException(status_code=404, detail="This PYQ no longer exists in the database")
+
+        if role == "student":
+            student_id = current_user.get("student_id")
+            if not student_id:
+                raise HTTPException(status_code=403, detail="Student account is not linked to a student record")
+            cursor.execute("SELECT batch_id FROM students WHERE student_id = %s", (student_id,))
+            student = cursor.fetchone()
+            if not student:
+                raise HTTPException(status_code=404, detail="Student record not found")
+            if student["batch_id"] != pyq["batch_id"]:
+                raise HTTPException(status_code=403, detail="You cannot access this PYQ")
+
+        elif role == "teacher":
+            tid = current_user.get("teacher_id")
+            if not tid or pyq["subject_id"] not in _teacher_subject_ids(cursor, tid):
+                raise HTTPException(status_code=403, detail="This PYQ is not for one of your subjects")
+
+        path = _resolve_stored_file(pyq["file_path"], PYQS_UPLOAD_DIR)
+        if not path:
+            raise HTTPException(
+                status_code=404,
+                detail="The PDF file is missing on the server. Please upload this PYQ again.")
+
+        return FileResponse(path=str(path), media_type="application/pdf", filename=pyq["file_name"])
     finally:
         cursor.close()
         connection.close()
@@ -3387,165 +3429,57 @@ async def upload_pyq(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
+    role = str(current_user.get("role", "")).lower()
+
+    if role not in ("admin", "teacher"):
+        raise HTTPException(status_code=403, detail="Only Admin or Teacher can upload PYQs")
+    if not title.strip():
+        raise HTTPException(status_code=400, detail="Title is required")
+    if exam_year < 1900 or exam_year > 2100:
+        raise HTTPException(status_code=400, detail="Invalid exam year")
+
+    original_filename, file_content = await read_valid_pdf(file)
+
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
+    stored_path = None
 
     try:
-        role = str(current_user.get("role", "")).lower()
+        check_subject_matches_batch(cursor, subject_id, batch_id)
 
-        # Only Admin and Teacher can upload PYQs.
-        if role not in ("admin", "teacher"):
-            raise HTTPException(
-                status_code=403,
-                detail="Only Admin or Teacher can upload PYQs"
-            )
-
-        if not file.filename:
-            raise HTTPException(
-                status_code=400,
-                detail="No file selected"
-            )
-
-        original_filename = Path(file.filename).name
-
-        if Path(original_filename).suffix.lower() != ".pdf":
-            raise HTTPException(
-                status_code=400,
-                detail="Only PDF files are allowed"
-            )
-
-        if exam_year is not None and (
-            exam_year < 1900 or exam_year > 2100
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid exam year"
-            )
-
-        # Check subject.
-        cursor.execute(
-            """
-            SELECT subject_id
-            FROM subjects
-            WHERE subject_id = %s
-            """,
-            (subject_id,)
-        )
-
-        subject = cursor.fetchone()
-
-        if not subject:
-            raise HTTPException(
-                status_code=404,
-                detail="Subject not found"
-            )
-
-        # Check batch.
-        cursor.execute(
-            """
-            SELECT batch_id
-            FROM batches
-            WHERE batch_id = %s
-            """,
-            (batch_id,)
-        )
-
-        batch = cursor.fetchone()
-
-        if not batch:
-            raise HTTPException(
-                status_code=404,
-                detail="Batch not found"
-            )
-
-        # If teacher is uploading, verify subject mapping.
         if role == "teacher":
-
-            teacher_id = current_user.get("teacher_id")
-
-            if not teacher_id:
+            logged_teacher_id = current_user.get("teacher_id")
+            if not logged_teacher_id:
                 raise HTTPException(
                     status_code=403,
-                    detail="Teacher account is not linked to a teacher record"
-                )
+                    detail="Teacher account is not linked to a teacher record")
+            check_teacher_owns_subject(cursor, logged_teacher_id, subject_id)
 
-            cursor.execute(
-                """
-                SELECT 1
-                FROM teacher_skills
-                WHERE teacher_id = %s
-                AND subject_id = %s
-                """,
-                (teacher_id, subject_id)
-            )
-
-            if not cursor.fetchone():
-                raise HTTPException(
-                    status_code=403,
-                    detail="You are not mapped to this subject"
-                )
-
-        file_content = await file.read()
-
-        if not file_content:
-            raise HTTPException(
-                status_code=400,
-                detail="Uploaded PDF is empty"
-            )
-
-        stored_filename = (
-            f"{uuid.uuid4().hex}_{original_filename}"
-        )
-
-        stored_path = PYQS_UPLOAD_DIR / stored_filename
-
-        with open(stored_path, "wb") as output_file:
-            output_file.write(file_content)
-
-        uploaded_by = current_user.get("user_id")
+        stored_path = save_pdf(file_content, PYQS_UPLOAD_DIR)
 
         cursor_insert = connection.cursor()
-
         try:
             cursor_insert.execute(
                 """
                 INSERT INTO pyqs
-                (
-                    subject_id,
-                    batch_id,
-                    title,
-                    exam_year,
-                    description,
-                    file_name,
-                    file_path,
-                    uploaded_by
-                )
+                (subject_id, batch_id, title, exam_year, description,
+                 file_name, file_path, uploaded_by)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    subject_id,
-                    batch_id,
-                    title.strip(),
-                    exam_year,
+                    subject_id, batch_id, title.strip(), exam_year,
                     description.strip() if description else None,
-                    original_filename,
-                    str(stored_path),
-                    uploaded_by
+                    original_filename, str(stored_path),
+                    current_user.get("user_id"),
                 )
             )
-
             connection.commit()
-
             pyq_id = cursor_insert.lastrowid
-
         except Exception:
             connection.rollback()
-
-            if stored_path.exists():
+            if stored_path and stored_path.exists():
                 stored_path.unlink()
-
             raise
-
         finally:
             cursor_insert.close()
 
@@ -3556,112 +3490,71 @@ async def upload_pyq(
             "batch_id": batch_id,
             "title": title.strip(),
             "exam_year": exam_year,
-            "file_name": original_filename
+            "file_name": original_filename,
         }
 
     except HTTPException:
         raise
-
     except Exception as e:
         connection.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         cursor.close()
         connection.close()
 
-
-@app.get("/pyqs/{pyq_id}/download")
-def download_pyq(
+@app.delete("/pyqs/{pyq_id}")
+def delete_pyq(
     pyq_id: int,
     current_user: dict = Depends(get_current_user)
 ):
+    """
+    Admin can delete any PYQ. A teacher can delete only the PYQs
+    they uploaded themselves.
+    """
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
-
+ 
     try:
         role = str(current_user.get("role", "")).lower()
-
-        if role not in ("admin", "teacher", "student"):
+ 
+        if role not in ("admin", "teacher"):
             raise HTTPException(
                 status_code=403,
-                detail="You are not authorized to download PYQs"
+                detail="Only Admin or Teacher can delete PYQs"
             )
-
+ 
         cursor.execute(
-            """
-            SELECT
-                p.pyq_id,
-                p.batch_id,
-                p.file_name,
-                p.file_path
-            FROM pyqs p
-            WHERE p.pyq_id = %s
-            """,
+            "SELECT uploaded_by, file_path FROM pyqs WHERE pyq_id = %s",
             (pyq_id,)
         )
-
         pyq = cursor.fetchone()
-
+ 
         if not pyq:
+            raise HTTPException(status_code=404, detail="PYQ not found")
+ 
+        if role == "teacher" and pyq["uploaded_by"] != current_user.get("user_id"):
             raise HTTPException(
-                status_code=404,
-                detail="PYQ not found"
+                status_code=403,
+                detail="You can only delete PYQs you uploaded yourself"
             )
+ 
+        delete_cursor = connection.cursor()
+        delete_cursor.execute("DELETE FROM pyqs WHERE pyq_id = %s", (pyq_id,))
+        connection.commit()
+        delete_cursor.close()
 
-        # Student can download only their own batch PYQs.
-        if role == "student":
-
-            student_id = current_user.get("student_id")
-
-            cursor.execute(
-                """
-                SELECT batch_id
-                FROM students
-                WHERE student_id = %s
-                """,
-                (student_id,)
-            )
-
-            student = cursor.fetchone()
-
-            if not student:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Student record not found"
-                )
-
-            if student["batch_id"] != pyq["batch_id"]:
-                raise HTTPException(
-                    status_code=403,
-                    detail="You cannot access this PYQ"
-                )
-
-        file_path = Path(pyq["file_path"]).resolve()
-        upload_root = PYQS_UPLOAD_DIR.resolve()
-
-        # Prevent paths outside the PYQ folder.
-        if upload_root not in file_path.parents:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid file path"
-            )
-
-        if not file_path.is_file():
-            raise HTTPException(
-                status_code=404,
-                detail="PYQ PDF file not found"
-            )
-
-        return FileResponse(
-            path=str(file_path),
-            media_type="application/pdf",
-            filename=pyq["file_name"]
-        )
-
+        file_path = _resolve_stored_file(pyq["file_path"], PYQS_UPLOAD_DIR)
+        if file_path:
+            file_path.unlink()
+ 
+        return {"message": "PYQ deleted successfully", "pyq_id": pyq_id}
+ 
+    except HTTPException:
+        connection.rollback()
+        raise
+    except Exception as e:
+        connection.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         cursor.close()
         connection.close()
@@ -3869,205 +3762,6 @@ def delete_syllabus_progress(progress_id: int):
         cursor.close()
         connection.close()
 
-
-# ==================== PROJECT GUIDES ====================
-
-@app.get("/project-guides")
-def get_project_guides():
-    connection = get_db_connection()
-    cursor = connection.cursor(dictionary=True)
-
-    cursor.execute("""
-        SELECT
-            pg.project_id,
-            pg.project_title,
-            pg.project_status,
-            pg.assigned_date,
-            s.student_id,
-            s.student_name,
-            s.roll_number,
-            t.teacher_id AS guide_teacher_id,
-            t.teacher_name AS guide_teacher
-        FROM project_guides pg
-        JOIN students s
-            ON pg.student_id = s.student_id
-        JOIN teachers t
-            ON pg.guide_teacher_id = t.teacher_id
-        ORDER BY pg.assigned_date DESC
-    """)
-
-    projects = cursor.fetchall()
-
-    cursor.close()
-    connection.close()
-
-    return projects
-
-
-@app.post("/project-guides")
-def create_project_guide(
-    student_id: int,
-    guide_teacher_id: int,
-    project_title: str,
-    project_status: str,
-    assigned_date: str
-):
-    connection = get_db_connection()
-    cursor = connection.cursor()
-
-    try:
-        cursor.execute(
-            """
-            INSERT INTO project_guides
-            (
-                student_id,
-                guide_teacher_id,
-                project_title,
-                project_status,
-                assigned_date
-            )
-            VALUES (%s, %s, %s, %s, %s)
-            """,
-            (
-                student_id,
-                guide_teacher_id,
-                project_title,
-                project_status,
-                assigned_date
-            )
-        )
-
-        connection.commit()
-
-        project_id = cursor.lastrowid
-
-        return {
-            "message": "Project guide created successfully",
-            "project_id": project_id,
-            "student_id": student_id,
-            "guide_teacher_id": guide_teacher_id,
-            "project_title": project_title,
-            "project_status": project_status,
-            "assigned_date": assigned_date
-        }
-
-    except Exception as e:
-        connection.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
-    finally:
-        cursor.close()
-        connection.close()
-
-
-@app.put("/project-guides/{project_id}")
-def update_project_guide(
-    project_id: int,
-    student_id: int,
-    guide_teacher_id: int,
-    project_title: str,
-    project_status: str,
-    assigned_date: str
-):
-    connection = get_db_connection()
-    cursor = connection.cursor()
-
-    try:
-        cursor.execute(
-            """
-            UPDATE project_guides
-            SET student_id = %s,
-                guide_teacher_id = %s,
-                project_title = %s,
-                project_status = %s,
-                assigned_date = %s
-            WHERE project_id = %s
-            """,
-            (
-                student_id,
-                guide_teacher_id,
-                project_title,
-                project_status,
-                assigned_date,
-                project_id
-            )
-        )
-
-        if cursor.rowcount == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Project guide not found"
-            )
-
-        connection.commit()
-
-        return {
-            "message": "Project guide updated successfully",
-            "project_id": project_id,
-            "student_id": student_id,
-            "guide_teacher_id": guide_teacher_id,
-            "project_title": project_title,
-            "project_status": project_status,
-            "assigned_date": assigned_date
-        }
-
-    except HTTPException:
-        connection.rollback()
-        raise
-
-    except Exception as e:
-        connection.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
-    finally:
-        cursor.close()
-        connection.close()
-
-
-@app.delete("/project-guides/{project_id}")
-def delete_project_guide(project_id: int):
-    connection = get_db_connection()
-    cursor = connection.cursor()
-
-    try:
-        cursor.execute(
-            "DELETE FROM project_guides WHERE project_id = %s",
-            (project_id,)
-        )
-
-        if cursor.rowcount == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Project guide not found"
-            )
-
-        connection.commit()
-
-        return {
-            "message": "Project guide deleted successfully",
-            "project_id": project_id
-        }
-
-    except HTTPException:
-        connection.rollback()
-        raise
-
-    except Exception as e:
-        connection.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
-    finally:
-        cursor.close()
-        connection.close()
 
 # ==================== BATCHES ====================
 
@@ -4733,6 +4427,13 @@ class LoginRequest(BaseModel):
     password: str
     role: str | None = None            # which login page was used (admin / teacher / student)
 
+class ForgotPasswordRequest(BaseModel):
+    email: str    
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str    
+
 
 # ==================== AUTH: endpoints ====================
 
@@ -4926,3 +4627,251 @@ def get_me(current_user: dict = Depends(get_current_user)):
     safe = dict(current_user)
     safe.pop("password_hash", None)
     return safe
+
+# ============================================================
+# FORGOT PASSWORD
+# ============================================================
+
+@app.post("/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest):
+    email = str(payload.email).strip().lower()
+
+    generic_message = (
+        "If an account exists with this email, "
+        "a password reset OTP will be sent."
+    )
+
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT user_id, name, email, role
+            FROM users
+            WHERE LOWER(email) = %s
+            LIMIT 1
+            """,
+            (email,)
+        )
+        user = cursor.fetchone()
+
+        if not user:
+            return {"message": generic_message}
+
+        # Invalidate earlier unused OTPs for this account.
+        cursor.execute(
+            """
+            UPDATE password_reset_otps
+            SET used_at = UTC_TIMESTAMP()
+            WHERE user_id = %s AND used_at IS NULL
+            """,
+            (user["user_id"],)
+        )
+
+        # Generate a cryptographically secure 6-digit OTP.
+        otp = f"{secrets.randbelow(1_000_000):06d}"
+        otp_hash = hash_reset_otp(otp)
+
+        cursor.execute(
+            """
+            INSERT INTO password_reset_otps
+                (user_id, otp_hash, expires_at, attempts)
+            VALUES
+                (%s, %s, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE), 0)
+            """,
+            (user["user_id"], otp_hash)
+        )
+
+        connection.commit()
+
+        try:
+            send_reset_otp_email(
+                user["email"],
+                user["name"],
+                otp
+            )
+        except Exception as email_error:
+            print("OTP email delivery failed:", email_error)
+
+            cursor.execute(
+                """
+                UPDATE password_reset_otps
+                SET used_at = UTC_TIMESTAMP()
+                WHERE user_id = %s
+                AND otp_hash = %s
+                AND used_at IS NULL
+                """,
+                (user["user_id"], otp_hash)
+            )
+            connection.commit()
+
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to send OTP email. Check email service configuration."
+            )
+
+        return {"message": generic_message}
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        connection.rollback()
+        print("Forgot password error:", error)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to process the password reset request."
+        )
+
+    finally:
+        cursor.close()
+        connection.close()
+
+# ============================================================
+# RESET PASSWORD
+# ============================================================
+
+@app.post("/reset-password")
+def reset_password(payload: ResetPasswordOTPRequest):
+    email = str(payload.email).strip().lower()
+    otp = payload.otp.strip()
+    new_password = payload.new_password
+
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                r.reset_id,
+                r.user_id,
+                r.otp_hash,
+                r.expires_at,
+                r.attempts
+            FROM password_reset_otps r
+            JOIN users u ON u.user_id = r.user_id
+            WHERE LOWER(u.email) = %s
+              AND r.used_at IS NULL
+            ORDER BY r.reset_id DESC
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (email,)
+        )
+
+        record = cursor.fetchone()
+
+        if not record:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid or expired OTP. Request a new OTP."
+            )
+
+        if record["attempts"] >= 5:
+            cursor.execute(
+                """
+                UPDATE password_reset_otps
+                SET used_at = UTC_TIMESTAMP()
+                WHERE reset_id = %s
+                """,
+                (record["reset_id"],)
+            )
+            connection.commit()
+
+            raise HTTPException(
+                status_code=400,
+                detail="Too many attempts. Request a new OTP."
+            )
+
+        cursor.execute(
+            """
+            SELECT expires_at > UTC_TIMESTAMP() AS is_valid
+            FROM password_reset_otps
+            WHERE reset_id = %s
+            """,
+            (record["reset_id"],)
+        )
+
+        expiry_check = cursor.fetchone()
+
+        if not expiry_check or not expiry_check["is_valid"]:
+            cursor.execute(
+                """
+                UPDATE password_reset_otps
+                SET used_at = UTC_TIMESTAMP()
+                WHERE reset_id = %s
+                """,
+                (record["reset_id"],)
+            )
+            connection.commit()
+
+            raise HTTPException(
+                status_code=400,
+                detail="OTP expired. Request a new OTP."
+            )
+
+        supplied_hash = hash_reset_otp(otp)
+
+        if not hmac.compare_digest(
+            supplied_hash,
+            record["otp_hash"]
+        ):
+            cursor.execute(
+                """
+                UPDATE password_reset_otps
+                SET attempts = attempts + 1
+                WHERE reset_id = %s
+                """,
+                (record["reset_id"],)
+            )
+            connection.commit()
+
+            raise HTTPException(
+                status_code=400,
+                detail="Incorrect OTP."
+            )
+
+        new_password_hash = hash_password(new_password)
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET password_hash = %s
+            WHERE user_id = %s
+            """,
+            (new_password_hash, record["user_id"])
+        )
+
+        cursor.execute(
+            """
+            UPDATE password_reset_otps
+            SET used_at = UTC_TIMESTAMP()
+            WHERE user_id = %s AND used_at IS NULL
+            """,
+            (record["user_id"],)
+        )
+
+        connection.commit()
+
+        return {
+            "message": "Password reset successfully. You can now log in."
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        connection.rollback()
+        print("Reset password error:", error)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to reset password."
+        )
+
+    finally:
+        cursor.close()
+        connection.close()

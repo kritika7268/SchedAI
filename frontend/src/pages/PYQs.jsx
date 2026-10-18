@@ -2,8 +2,17 @@ import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 
 const API_URL = "http://127.0.0.1:8000";
+const MAX_MB = 20;
 const CURRENT_YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: 8 }, (_, i) => CURRENT_YEAR - i);
+
+function checkPdf(file) {
+  if (!file) return "Please choose a PDF file.";
+  if (!file.name.toLowerCase().endsWith(".pdf")) return "Only PDF files are allowed.";
+  if (file.size === 0) return "The selected file is empty.";
+  if (file.size > MAX_MB * 1024 * 1024) return `File is larger than ${MAX_MB} MB.`;
+  return null;
+}
 
 function PYQs() {
   const { user } = useAuth();
@@ -12,21 +21,22 @@ function PYQs() {
 
   const [pyqs, setPyqs] = useState([]);
   const [subjects, setSubjects] = useState([]);
+  const [allSubjects, setAllSubjects] = useState([]);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState(null);
 
-  // Upload form
   const [subjectId, setSubjectId] = useState("");
   const [batchId, setBatchId] = useState("");
   const [title, setTitle] = useState("");
   const [examYear, setExamYear] = useState(String(CURRENT_YEAR));
   const [description, setDescription] = useState("");
   const [file, setFile] = useState(null);
+  const [fileKey, setFileKey] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
+  const [uploadOk, setUploadOk] = useState(null);
 
-  // Filters
   const [filterSubject, setFilterSubject] = useState("");
   const [filterBatch, setFilterBatch] = useState("");
   const [filterYear, setFilterYear] = useState("");
@@ -39,8 +49,18 @@ function PYQs() {
         fetch(`${API_URL}/subjects`),
         fetch(`${API_URL}/batches`),
       ]);
-      setSubjects(subjectsRes.ok ? await subjectsRes.json() : []);
+      const allSubs = subjectsRes.ok ? await subjectsRes.json() : [];
+      setAllSubjects(allSubs);
       setBatches(batchesRes.ok ? await batchesRes.json() : []);
+
+      if (role === "teacher" && user?.teacher_id) {
+        const skillsRes = await fetch(`${API_URL}/teacher-skills?teacher_id=${user.teacher_id}`);
+        const skills = skillsRes.ok ? await skillsRes.json() : [];
+        const mappedIds = new Set(skills.map((s) => s.subject_id));
+        setSubjects(allSubs.filter((s) => mappedIds.has(s.subject_id)));
+      } else {
+        setSubjects(allSubs);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -55,9 +75,7 @@ function PYQs() {
       if (filterBatch) params.append("batch_id", filterBatch);
       if (filterYear) params.append("exam_year", filterYear);
 
-      const res = await fetch(`${API_URL}/pyqs?${params.toString()}`, {
-        headers: authHeaders,
-      });
+      const res = await fetch(`${API_URL}/pyqs?${params.toString()}`, { headers: authHeaders });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Failed to load PYQs");
@@ -73,12 +91,29 @@ function PYQs() {
 
   useEffect(() => {
     fetchReferenceData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (token) fetchPyqs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, filterSubject, filterBatch, filterYear]);
+
+  const selectedSubject = subjects.find((s) => String(s.subject_id) === String(subjectId));
+  const uploadBatches = useMemo(() => {
+    if (!selectedSubject) return [];
+    return batches.filter(
+      (b) =>
+        (selectedSubject.semester == null || Number(b.semester) === Number(selectedSubject.semester)) &&
+        (selectedSubject.department_id == null || b.department_id === selectedSubject.department_id) &&
+        (selectedSubject.batch_id == null || b.batch_id === selectedSubject.batch_id)
+    );
+  }, [batches, selectedSubject]);
+
+  const handleSubjectChange = (id) => {
+    setSubjectId(id);
+    setBatchId("");
+  };
 
   const resetForm = () => {
     setSubjectId("");
@@ -87,24 +122,26 @@ function PYQs() {
     setExamYear(String(CURRENT_YEAR));
     setDescription("");
     setFile(null);
+    setFileKey((k) => k + 1);
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
     setUploadError(null);
+    setUploadOk(null);
 
-    if (!subjectId || !batchId || !title.trim() || !examYear || !file) {
-      setUploadError("Please fill subject, batch, title, year and choose a PDF file.");
+    if (!subjectId || !batchId || !title.trim() || !examYear) {
+      setUploadError("Please fill subject, batch, title and year.");
       return;
     }
-    if (file.type !== "application/pdf") {
-      setUploadError("Only PDF files are allowed.");
+    const fileProblem = checkPdf(file);
+    if (fileProblem) {
+      setUploadError(fileProblem);
       return;
     }
 
     try {
       setUploading(true);
-
       const params = new URLSearchParams({
         subject_id: subjectId,
         batch_id: batchId,
@@ -121,13 +158,13 @@ function PYQs() {
         headers: authHeaders,
         body: formData,
       });
-
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Upload failed");
+        throw new Error(typeof err.detail === "string" ? err.detail : "Upload failed");
       }
 
       resetForm();
+      setUploadOk("PYQ uploaded successfully.");
       await fetchPyqs();
     } catch (e) {
       setUploadError(e.message || "Could not upload PYQ");
@@ -138,9 +175,7 @@ function PYQs() {
 
   const handleDownload = async (pyqId, fileName) => {
     try {
-      const res = await fetch(`${API_URL}/pyqs/${pyqId}/download`, {
-        headers: authHeaders,
-      });
+      const res = await fetch(`${API_URL}/pyqs/${pyqId}/download`, { headers: authHeaders });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Download failed");
@@ -159,7 +194,25 @@ function PYQs() {
     }
   };
 
-  const visiblePyqs = useMemo(() => pyqs, [pyqs]); // filtering already done server-side
+  const canDelete = (pyq) => {
+    if (role === "admin") return true;
+    if (role === "teacher" && pyq.uploaded_by === user?.user_id) return true;
+    return false;
+  };
+
+  const handleDelete = async (pyqId) => {
+    if (!window.confirm("Delete this PYQ? This cannot be undone.")) return;
+    try {
+      const res = await fetch(`${API_URL}/pyqs/${pyqId}`, { method: "DELETE", headers: authHeaders });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Delete failed");
+      }
+      await fetchPyqs();
+    } catch (e) {
+      alert(e.message || "Could not delete PYQ");
+    }
+  };
 
   if (!token) {
     return (
@@ -172,9 +225,14 @@ function PYQs() {
   return (
     <div style={{ padding: "30px", maxWidth: "1100px", margin: "0 auto" }}>
       <h1>Previous Year Questions</h1>
-      <p>Upload and browse PYQs by subject, batch, and year.</p>
+      <p>
+        {role === "student"
+          ? "Download previous year papers for your batch. Students can only view and download."
+          : role === "teacher"
+          ? "Upload PYQs for your own subjects, and manage the ones you uploaded."
+          : "Upload, download and manage PYQs for all batches."}
+      </p>
 
-      {/* UPLOAD FORM — admin/teacher only; backend also enforces this */}
       {(role === "admin" || role === "teacher") && (
         <form
           onSubmit={handleUpload}
@@ -186,8 +244,10 @@ function PYQs() {
         >
           <h2 style={{ margin: 0 }}>Upload PYQ</h2>
 
-          <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={{ padding: "10px" }}>
-            <option value="">Select Subject</option>
+          <select value={subjectId} onChange={(e) => handleSubjectChange(e.target.value)} style={{ padding: "10px" }}>
+            <option value="">
+              {role === "teacher" && subjects.length === 0 ? "No subjects mapped to you yet" : "Select Subject"}
+            </option>
             {subjects.map((s) => (
               <option key={s.subject_id} value={s.subject_id}>
                 {s.subject_name} ({s.subject_code})
@@ -196,9 +256,14 @@ function PYQs() {
           </select>
 
           <div style={{ display: "flex", gap: "12px" }}>
-            <select value={batchId} onChange={(e) => setBatchId(e.target.value)} style={{ padding: "10px", flex: 1 }}>
-              <option value="">Select Batch</option>
-              {batches.map((b) => (
+            <select
+              value={batchId}
+              onChange={(e) => setBatchId(e.target.value)}
+              disabled={!subjectId}
+              style={{ padding: "10px", flex: 1 }}
+            >
+              <option value="">{subjectId ? "Select Batch" : "Select a subject first"}</option>
+              {uploadBatches.map((b) => (
                 <option key={b.batch_id} value={b.batch_id}>
                   {b.batch_name}{b.section ? ` (${b.section})` : ""} — Sem {b.semester}
                 </option>
@@ -209,31 +274,48 @@ function PYQs() {
               {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
+          {subjectId && uploadBatches.length === 0 && (
+            <div style={{ fontSize: 13, color: "#92400e" }}>
+              No batch matches this subject's semester. Check the subject and batch setup.
+            </div>
+          )}
 
           <input
             type="text" value={title} onChange={(e) => setTitle(e.target.value)}
-            placeholder="Title (e.g. End-Sem Exam Paper)"
-            style={{ padding: "10px" }}
+            placeholder="Title (e.g. End-Sem Exam Paper)" style={{ padding: "10px" }}
           />
-
           <textarea
             value={description} onChange={(e) => setDescription(e.target.value)}
-            placeholder="Description (optional)"
-            style={{ padding: "10px" }}
+            placeholder="Description (optional)" style={{ padding: "10px" }}
           />
 
           <label>
-            PDF File
+            PDF File (max {MAX_MB} MB)
             <input
-              type="file" accept="application/pdf"
-              onChange={(e) => setFile(e.target.files[0] || null)}
+              key={fileKey}
+              type="file" accept="application/pdf,.pdf"
+              onChange={(e) => {
+                const f = e.target.files[0] || null;
+                setFile(f);
+                setUploadError(f ? checkPdf(f) : null);
+              }}
               style={{ display: "block", marginTop: "6px" }}
             />
           </label>
+          {file && !checkPdf(file) && (
+            <div style={{ fontSize: 13, color: "#166534" }}>
+              ✓ {file.name} ({(file.size / (1024 * 1024)).toFixed(2)} MB)
+            </div>
+          )}
 
           {uploadError && (
             <div style={{ padding: "10px 14px", borderRadius: 6, background: "#fee2e2", color: "#991b1b", fontSize: 13 }}>
               {uploadError}
+            </div>
+          )}
+          {uploadOk && (
+            <div style={{ padding: "10px 14px", borderRadius: 6, background: "#dcfce7", color: "#166534", fontSize: 13 }}>
+              {uploadOk}
             </div>
           )}
 
@@ -253,7 +335,7 @@ function PYQs() {
       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "16px" }}>
         <select value={filterSubject} onChange={(e) => setFilterSubject(e.target.value)} style={{ padding: "8px" }}>
           <option value="">All Subjects</option>
-          {subjects.map((s) => (
+          {(role === "teacher" ? subjects : allSubjects).map((s) => (
             <option key={s.subject_id} value={s.subject_id}>{s.subject_name}</option>
           ))}
         </select>
@@ -278,11 +360,11 @@ function PYQs() {
         <p>Loading PYQs...</p>
       ) : listError ? (
         <p style={{ color: "#991b1b" }}>{listError}</p>
-      ) : visiblePyqs.length === 0 ? (
+      ) : pyqs.length === 0 ? (
         <p>No PYQs found.</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          {visiblePyqs.map((p) => (
+          {pyqs.map((p) => (
             <div
               key={p.pyq_id}
               style={{
@@ -296,8 +378,7 @@ function PYQs() {
                 <span
                   style={{
                     marginLeft: "10px", padding: "2px 10px", borderRadius: "12px",
-                    fontSize: "12px", fontWeight: 600,
-                    background: "#e0e7ff", color: "#3730a3",
+                    fontSize: "12px", fontWeight: 600, background: "#e0e7ff", color: "#3730a3",
                   }}
                 >
                   {p.exam_year}
@@ -310,9 +391,19 @@ function PYQs() {
                   <div style={{ fontSize: "13px", color: "#374151", marginTop: "4px" }}>{p.description}</div>
                 )}
               </div>
-              <button onClick={() => handleDownload(p.pyq_id, p.file_name)} style={{ padding: "8px 14px" }}>
-                ⬇️ Download
-              </button>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button onClick={() => handleDownload(p.pyq_id, p.file_name)} style={{ padding: "8px 14px" }}>
+                  ⬇️ Download
+                </button>
+                {canDelete(p) && (
+                  <button
+                    onClick={() => handleDelete(p.pyq_id)}
+                    style={{ padding: "8px 14px", color: "#991b1b", borderColor: "#fecaca" }}
+                  >
+                    🗑️ Delete
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>

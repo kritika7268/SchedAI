@@ -4,6 +4,9 @@ import { useAuth } from "../auth/AuthContext";
 import { ProgressBar, ProgressRing } from "./progressWidgets";
 import HolidayBanner from "./HolidayBanner";
 import NotificationBell from "./NotificationBell";
+import MyGuideCard from "./MyGuideCard";
+import MyExams from "./MyExams";
+import { useExamWeek, ExamWeekBanner } from "./ExamWeek";
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -67,9 +70,9 @@ const S = {
             borderRadius:8, fontSize:14, fontWeight:600, color:C.text, cursor:"pointer" },
 
   batchPill: { display:"inline-flex", alignItems:"center", gap:8,
-               background:C.accentDim, color:C.accent,
-               padding:"6px 14px", borderRadius:20, fontSize:13,
-               fontWeight:600, marginBottom:28 },
+              background:C.accentDim, color:C.accent,
+              padding:"6px 14px", borderRadius:20, fontSize:13,
+              fontWeight:600, marginBottom:28 },
 
   lbl:    { fontSize:11, fontWeight:700, letterSpacing:"0.07em",
             textTransform:"uppercase", color:C.muted, marginBottom:10 },
@@ -124,6 +127,22 @@ const S = {
 
   empty:  { textAlign:"center", padding:"32px 0", color:C.muted },
   emptyIco:{ fontSize:36, marginBottom:10 },
+
+
+// notes / PYQ download rows
+  docRow: { display:"flex", justifyContent:"space-between", alignItems:"center",
+            flexWrap:"wrap", gap:8, padding:"11px 14px",
+            background:C.faint, borderRadius:8, marginBottom:8 },
+  docTitle:{ fontWeight:600, fontSize:14 },
+  docMeta: { fontSize:12, color:C.muted, marginTop:2 },
+  docBtn:  { padding:"6px 12px", fontSize:13, fontWeight:600,
+            background:C.surface, border:`1px solid ${C.border}`,
+            borderRadius:6, cursor:"pointer" },
+  tabRow:  { display:"flex", gap:8, marginBottom:14 },
+  tabBtn:  { padding:"6px 16px", fontSize:13, fontWeight:600,
+              borderRadius:20, cursor:"pointer", border:`1px solid ${C.border}`,
+              background:C.surface, color:C.muted },
+  tabBtnActive: { background:C.accent, color:"#fff", borderColor:C.accent },
 };
 
 // ── Time slots for grid: 50-min classes, 1-hour lunch 12:20 PM - 1:20 PM ──────
@@ -142,6 +161,9 @@ const TIME_SLOTS = [
 export default function StudentDashboard() {
   const { user } = useAuth();
   const studentId = user?.student_id;
+  const token = user?.access_token;
+  const examWeek = useExamWeek();
+  const classesSuspended = !!examWeek?.active;
 
   const [student,       setStudent]       = useState(null);
   const [batch,         setBatch]         = useState(null);
@@ -150,12 +172,25 @@ export default function StudentDashboard() {
   const [loading,       setLoading]       = useState(true);
   const [error,         setError]         = useState(null);
   const [syllabus,      setSyllabus]      = useState(null);
+  const [now,           setNow]           = useState(new Date());
+
+  // tick every 30 seconds so the "ongoing / next / all done" card stays correct
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   const todayName    = DAYS[new Date().getDay()];
   const todayDate    = todayISODate();
   const todayFormatted = new Date().toLocaleDateString("en-IN", {
     weekday:"long", day:"numeric", month:"long"
   });
+
+   // Notes & PYQs — the backend auto-filters both to this student's own batch.
+  const [docTab,      setDocTab]      = useState("notes"); // "notes" | "pyqs"
+  const [notes,       setNotes]       = useState([]);
+  const [pyqs,        setPyqs]        = useState([]);
+  const [docsLoading, setDocsLoading] = useState(true);
 
   // ── fetch everything ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -222,12 +257,60 @@ export default function StudentDashboard() {
       .catch(() => {});
   }, [user]);
 
+   // ── Notes & PYQs: the backend sees role = "student" in the JWT and filters
+  //    to this student's own batch automatically, so no batch_id param needed.
+  useEffect(() => {
+    if (!token) { setDocsLoading(false); return; }
+ 
+    (async () => {
+      try {
+        setDocsLoading(true);
+        const authHeaders = { Authorization: `Bearer ${token}` };
+        const [notesRes, pyqsRes] = await Promise.all([
+          fetch(`${API_URL}/notes`, { headers: authHeaders }),
+          fetch(`${API_URL}/pyqs`,  { headers: authHeaders }),
+        ]);
+        setNotes(notesRes.ok ? await notesRes.json() : []);
+        setPyqs(pyqsRes.ok  ? await pyqsRes.json()  : []);
+      } catch (e) {
+        console.error("Could not load notes/PYQs:", e);
+      } finally {
+        setDocsLoading(false);
+      }
+    })();
+  }, [token]);
+ 
+  // Downloads need the Bearer token, so a plain <a href> can't be used —
+  // fetch the PDF as a blob and trigger the save from memory.
+  const handleDocDownload = async (kind, id, fileName) => {
+    try {
+      const res = await fetch(`${API_URL}/${kind}/${id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Download failed");
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName || "file.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e.message || "Could not download file");
+    }
+  };
+
   // ── derived data ────────────────────────────────────────────────────────────
-  const todaysRegular = useMemo(() =>
+   const todaysRegular = useMemo(() =>
     timetables
-      .filter(t => t.day_of_week === todayName)
+      .filter(t => !classesSuspended && t.day_of_week === todayName)
       .sort((a,b) => Number(a.start_time) - Number(b.start_time)),
-  [timetables, todayName]);
+  [timetables, todayName, classesSuspended]);
 
   // substitution map: timetable_id -> substitute teacher name
   const subMap = useMemo(() => {
@@ -243,8 +326,21 @@ export default function StudentDashboard() {
     })),
   [todaysRegular, subMap]);
 
-  const nowSeconds = new Date().getHours() * 3600 + new Date().getMinutes() * 60;
-  const nextClass  = todaysMerged.find(t => Number(t.start_time) > nowSeconds) ?? null;
+  const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60;
+
+  // class running right now (started, not yet finished)
+  const currentClass = todaysMerged.find(
+    t => Number(t.start_time) <= nowSeconds && nowSeconds < Number(t.end_time)
+  ) ?? null;
+
+  // next class that has not started yet
+  const nextClass = todaysMerged.find(t => Number(t.start_time) > nowSeconds) ?? null;
+
+  // "all done" only after the LAST class has actually ended (e.g. 3:50 PM)
+  const lastEnd = todaysMerged.length
+    ? Math.max(...todaysMerged.map(t => Number(t.end_time)))
+    : 0;
+  const allDone = todaysMerged.length > 0 && nowSeconds >= lastEnd;
 
   // weekly grid: "Day_startSeconds" -> class
   const weeklyMap = useMemo(() => {
@@ -290,6 +386,7 @@ export default function StudentDashboard() {
 
         {/* HOLIDAY NOTIFICATIONS */}
         <HolidayBanner />
+        <ExamWeekBanner week={examWeek} />
 
         {/* BATCH PILL */}
         {batch ? (
@@ -303,8 +400,27 @@ export default function StudentDashboard() {
           </div>
         )}
 
-        {/* NEXT CLASS HERO */}
-        {nextClass ? (
+        {/* NOW / NEXT CLASS HERO */}
+        {currentClass ? (
+          <div style={{ ...S.heroCard, background:"#16a34a" }}>
+            <div style={S.heroLabel}>Ongoing now</div>
+            <div style={S.heroSubj}>{currentClass.subject_name}</div>
+            <div style={S.heroMeta}>
+              {currentClass.substituteTeacher
+                ? `🔄 ${currentClass.substituteTeacher} (substitute)`
+                : `👤 ${currentClass.teacher_name}`}
+              &nbsp;·&nbsp; 🏫 {currentClass.room_name}
+            </div>
+            <div style={S.heroTime}>
+              {formatTime(currentClass.start_time)} – {formatTime(currentClass.end_time)}
+            </div>
+            {nextClass && (
+              <div style={{ marginTop:12, fontSize:13, opacity:0.9 }}>
+                Next: <b>{nextClass.subject_name}</b> at {formatTime(nextClass.start_time)}
+              </div>
+            )}
+          </div>
+        ) : nextClass ? (
           <div style={S.heroCard}>
             <div style={S.heroLabel}>Up next</div>
             <div style={S.heroSubj}>{nextClass.subject_name}</div>
@@ -318,7 +434,7 @@ export default function StudentDashboard() {
               {formatTime(nextClass.start_time)} – {formatTime(nextClass.end_time)}
             </div>
           </div>
-        ) : todaysMerged.length > 0 ? (
+        ) : allDone ? (
           <div style={{ ...S.heroCard, background:"#475569" }}>
             <div style={S.heroLabel}>Classes today</div>
             <div style={S.heroSubj}>All done for the day 🎉</div>
@@ -368,7 +484,9 @@ export default function StudentDashboard() {
             ))
           )}
         </div>
-
+        <MyExams />
+        {/* PROJECT GUIDE */}
+        <MyGuideCard />
         {/* SYLLABUS PROGRESS */}
         {syllabus && syllabus.subjects.length > 0 && (
           <div style={S.card}>
@@ -484,7 +602,92 @@ export default function StudentDashboard() {
             ))}
           </div>
         )}
-
+        {/* STUDY MATERIAL — Notes & PYQs for this student's own batch */}
+          <div style={S.card}>
+            <p style={S.lbl}>Study Material</p>
+ 
+          <div style={S.tabRow}>
+            <button
+              onClick={() => setDocTab("notes")}
+              style={{ ...S.tabBtn, ...(docTab === "notes" ? S.tabBtnActive : {}) }}
+            >
+              📝 Notes ({notes.length})
+            </button>
+            <button
+              onClick={() => setDocTab("pyqs")}
+              style={{ ...S.tabBtn, ...(docTab === "pyqs" ? S.tabBtnActive : {}) }}
+            >
+              📄 PYQs ({pyqs.length})
+            </button>
+          </div>
+ 
+          {docsLoading ? (
+            <p style={{ color:C.muted, fontSize:14 }}>Loading…</p>
+            ) : docTab === "notes" ? (
+            notes.length === 0 ? (
+              <div style={S.empty}>
+                <div style={S.emptyIco}>📭</div>
+                <p style={{ margin:0, fontSize:14 }}>No notes uploaded yet for your batch.</p>
+              </div>
+            ) : (
+              notes.map(n => (
+                <div key={n.note_id} style={S.docRow}>
+                  <div>
+                    <div style={S.docTitle}>
+                      {n.title}
+                      {n.unit && (
+                        <span style={{ color:C.muted, fontWeight:400 }}> — {n.unit}</span>
+                      )}
+                    </div>
+                    <div style={S.docMeta}>
+                      {n.subject_name} ({n.subject_code})
+                      {n.teacher_name && ` · ${n.teacher_name}`}
+                    </div>
+                  </div>
+                  <button
+                    style={S.docBtn}
+                    onClick={() => handleDocDownload("notes", n.note_id, n.file_name)}
+                  >
+                    ⬇️ Download
+                  </button>
+                </div>
+              ))
+            )
+          ) : (
+            pyqs.length === 0 ? (
+              <div style={S.empty}>
+                <div style={S.emptyIco}>📭</div>
+                <p style={{ margin:0, fontSize:14 }}>No PYQs uploaded yet for your batch.</p>
+              </div>
+            ) : (
+              pyqs.map(p => (
+                <div key={p.pyq_id} style={S.docRow}>
+                  <div>
+                    <div style={S.docTitle}>
+                      {p.title}
+                      <span style={{
+                        marginLeft:8, fontSize:11, fontWeight:700,
+                        background:C.accentDim, color:C.accent,
+                        padding:"2px 8px", borderRadius:10,
+                      }}>
+                        {p.exam_year}
+                      </span>
+                    </div>
+                    <div style={S.docMeta}>
+                      {p.subject_name} ({p.subject_code})
+                    </div>
+                  </div>
+                  <button
+                    style={S.docBtn}
+                    onClick={() => handleDocDownload("pyqs", p.pyq_id, p.file_name)}
+                  >
+                    ⬇️ Download
+                  </button>
+                </div>
+              ))
+            )
+          )}
+        </div>
       </div>
     </div>
   );

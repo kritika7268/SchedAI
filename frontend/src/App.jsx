@@ -17,7 +17,11 @@ import ProjectGuides from "./pages/ProjectGuides";
 import SyllabusProgress from "./pages/SyllabusProgress";
 import Holidays from "./pages/Holidays";
 import Events from "./pages/Events";
+import Notes from "./pages/Notes";
+import PYQs from "./pages/PYQs";
 import HolidayBanner from "./pages/HolidayBanner";
+import ExamSchedule from "./pages/ExamSchedule";
+import ExamOverviewCard from "./pages/ExamOverviewCard";
 
 import { useAuth } from "./auth/AuthContext";
 import ProtectedRoute from "./auth/ProtectedRoute";
@@ -27,14 +31,17 @@ import TeacherLogin from "./auth/TeacherLogin";
 import TeacherSignup from "./auth/TeacherSignup";
 import StudentLogin from "./auth/StudentLogin";
 import StudentSignup from "./auth/StudentSignup";
+import ForgotPassword from "./auth/ForgotPassword";
+import ResetPassword from "./auth/ResetPassword";
 import NotificationBell from "./pages/NotificationBell";
 import RoleLayout from "./pages/RoleLayout";
 import Profile from "./pages/Profile";
-import Notes from "./pages/Notes";
-import PYQs from "./pages/PYQs";
 import ImportData from "./pages/ImportData";
 import TeacherSyllabus from "./pages/TeacherSyllabus";
 import StudentSyllabus from "./pages/StudentSyllabus";
+import AdminSyllabus from "./pages/AdminSyllabus";
+import { BatchBarChart } from "./pages/SyllabusCharts";
+import { ProgressRing } from "./pages/progressWidgets";
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // =========================
@@ -251,6 +258,94 @@ function StatCard({ label, value, sub, tone, to }) {
   return <div style={cardStyle}>{content}</div>;
 }
 
+// SYLLABUS RING CARD (Admin Dashboard) — chart + percentage + numbers
+
+function SyllabusRingCard({ fallbackPercent }) {
+  const { user } = useAuth();
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/syllabus/progress/overview`, {
+      headers: { Authorization: `Bearer ${user?.access_token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setData)
+      .catch(() => {});
+  }, [user]);
+
+  const percent = data ? data.overall.percent : fallbackPercent || 0;
+
+  let subjectsDone = 0;
+  let subjectsTracked = 0;
+  if (data) {
+    data.batches.forEach((b) =>
+      b.subjects.forEach((s) => {
+        if (s.total > 0) {
+          subjectsTracked += 1;
+          if (s.covered >= s.total) subjectsDone += 1;
+        }
+      })
+    );
+  }
+
+  const batchesWithTopics = data ? data.batches.filter((b) => b.total > 0) : [];
+
+  return (
+    <Link
+      to="/admin/syllabus-progress"
+      style={{
+        background: D.surface,
+        border: `1px solid ${D.border}`,
+        borderRadius: 10,
+        padding: "18px 22px",
+        flex: "1 1 100%",
+        display: "flex",
+        alignItems: "center",
+        gap: 28,
+        flexWrap: "wrap",
+        textDecoration: "none",
+        color: "inherit",
+      }}
+    >
+      {/* left: overall ring */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <ProgressRing percent={percent} size={110} stroke={12} sub="overall" />
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: D.text }}>Syllabus Progress</div>
+          {data ? (
+            <>
+              <div style={{ fontSize: 12, color: D.muted, marginTop: 3 }}>
+                {data.overall.covered} of {data.overall.total} topics taught
+              </div>
+              <div style={{ fontSize: 12, color: D.muted, marginTop: 2 }}>
+                {subjectsDone} of {subjectsTracked} subjects completed
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: D.muted, marginTop: 3 }}>across all batches</div>
+          )}
+        </div>
+      </div>
+
+      {/* right: batch-wise chart */}
+      <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: D.muted, marginBottom: 6 }}>
+          Batch-wise progress
+        </div>
+        {batchesWithTopics.length > 0 ? (
+          <BatchBarChart batches={batchesWithTopics} />
+        ) : (
+          <div style={{ fontSize: 13, color: D.muted }}>
+                        No batch has topics yet.
+          </div>
+        )}
+      </div>
+
+      <span style={{ fontSize: 13, color: D.muted }}>→</span>
+    </Link>
+  );
+}
+
 // =========================
 // ADMIN DASHBOARD (home page inside /admin)
 // =========================
@@ -306,6 +401,7 @@ function Dashboard() {
             <StatCard
               label={`Today's Classes (${stats.today_day_name})`}
               value={stats.today.classes_scheduled}
+              sub={stats.classes_suspended ? "Exam week: classes suspended" : undefined}
               to="/admin/timetable-link"
             />
             <StatCard
@@ -334,14 +430,13 @@ function Dashboard() {
             />
           </div>
 
-          {/* Row 3: progress overviews */}
+          {/* Row 3: syllabus chart (full width) */}
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
+            <SyllabusRingCard fallbackPercent={stats.syllabus.average_progress_percent} />
+          </div>
+
+          {/* Row 4: project guides */}
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <StatCard
-              label="Syllabus Progress"
-              value={`${stats.syllabus.average_progress_percent}%`}
-              sub={`${stats.syllabus.subjects_tracked} subjects tracked`}
-              to="/admin/syllabus-progress"
-            />
             <StatCard
               label="Project Guide Allocation"
               value={`${stats.project_guides.students_with_guide}/${stats.project_guides.students_total}`}
@@ -353,6 +448,9 @@ function Dashboard() {
               to="/admin/project-guides"
             />
           </div>
+
+          {/* Row 5: exam timetable + invigilators */}
+          <ExamOverviewCard />
 
           {/* Today's substitution detail, if any */}
           {stats.today.substitutions.length > 0 && (
@@ -447,7 +545,7 @@ function AdminLayout() {
           <Link to="/admin/notes"><span>📚</span>Notes</Link>
           <Link to="/admin/pyqs"><span>📝</span>PYQs</Link>
           <Link to="/admin/import"><span>📥</span>Import Data</Link>
-          
+          <Link to="/admin/exams"><span>🗒️</span>Exam Timetable</Link>
         </nav>
       </aside>
 
@@ -516,7 +614,13 @@ function App() {
         <Route path="/teacher/signup" element={<TeacherSignup />} />
         <Route path="/student/login" element={<StudentLogin />} />
         <Route path="/student/signup" element={<StudentSignup />} />
-
+        <Route path="/admin/forgot-password" element={<ForgotPassword />} />
+        <Route path="/teacher/forgot-password" element={<ForgotPassword />} />
+        <Route path="/student/forgot-password" element={<ForgotPassword />} />
+        <Route path="/admin/reset-password" element={<ResetPassword />} />
+        <Route path="/teacher/reset-password" element={<ResetPassword />} />
+        <Route path="/student/reset-password" element={<ResetPassword />} />
+        
         {/* Teacher area (sidebar: Dashboard + Profile) */}
         <Route
           path="/teacher"
@@ -529,6 +633,8 @@ function App() {
           <Route path="dashboard" element={<TeacherDashboard />} />
           <Route path="syllabus" element={<TeacherSyllabus />} />
           <Route path="profile" element={<Profile role="teacher" />} />
+          <Route path="notes" element={<Notes />} />
+          <Route path="pyqs" element={<PYQs />} />
         </Route>
 
         {/* Student area (sidebar: Dashboard + Profile) */}
@@ -564,13 +670,14 @@ function App() {
           <Route path="timetable-link" element={<Timetable />} />
           <Route path="teacher-absences" element={<TeacherAbsences />} />
           <Route path="substitutions" element={<Substitutions />} />
-          <Route path="syllabus-progress" element={<SyllabusProgress />} />
+          <Route path="syllabus-progress" element={<AdminSyllabus />} />
           <Route path="project-guides" element={<ProjectGuides />} />
           <Route path="holidays" element={<Holidays />} />
           <Route path="events" element={<Events />} />
           <Route path="profile" element={<Profile role="admin" />} />
           <Route path="notes" element={<Notes />} />
           <Route path="pyqs" element={<PYQs />} />
+          <Route path="exams" element={<ExamSchedule />} />
           <Route path="import" element={<ImportData />} />
         </Route>
       </Routes>

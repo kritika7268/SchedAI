@@ -13,10 +13,17 @@ function LoginForm({ roleLabel, expectedRole, redirectTo, signupPath }) {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const { login } = useAuth();
-  const navigate = useNavigate();
+const { login } = useAuth();
+const navigate = useNavigate();
 
-  const handleSubmit = async (e) => {
+const forgotPasswordPath =
+  expectedRole === "admin"
+    ? "/admin/forgot-password"
+    : expectedRole === "teacher"
+    ? "/teacher/forgot-password"
+    : "/student/forgot-password";
+
+const handleSubmit = async (e) => {
     e.preventDefault();
 
     if (!email.trim() || !password) {
@@ -114,6 +121,26 @@ function LoginForm({ roleLabel, expectedRole, redirectTo, signupPath }) {
             {loading ? "Logging in..." : "Login"}
           </button>
         </form>
+
+        <p
+          style={{
+            marginTop: "10px",
+            marginBottom: "0",
+            fontSize: "14px",
+            textAlign: "right",
+        }}
+      >
+        <Link
+          to={forgotPasswordPath}
+          style={{
+            color: "#1e293b",
+            fontWeight: "600",
+            textDecoration: "none",
+          }}
+        >
+      Forgot Password?
+    </Link>
+</p>
 
         <p style={{ marginTop: "20px", fontSize: "14px", textAlign: "center" }}>
           Don't have an account?{" "}

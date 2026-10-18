@@ -1,369 +1,208 @@
 import { useEffect, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
+const C = {
+  surface: "#ffffff", border: "#e8eaed", text: "#0f172a", muted: "#64748b",
+  accent: "#1e293b", faint: "#f1f5f9", ok: "#16a34a", warn: "#d97706",
+};
+
+const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 22px", marginBottom: 20 };
+const btn = (bg, color = "#fff") => ({
+  padding: "8px 14px", background: bg, color, border: "none", borderRadius: 8,
+  fontWeight: 600, fontSize: 13, cursor: "pointer",
+});
 
 function ProjectGuides() {
-  const [projects, setProjects] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [teachers, setTeachers] = useState([]);
+  const { user } = useAuth();
+  const [batches, setBatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [open, setOpen] = useState({});
 
-  const [studentId, setStudentId] = useState("");
-  const [guideTeacherId, setGuideTeacherId] = useState("");
-  const [projectTitle, setProjectTitle] = useState("");
-  const [projectStatus, setProjectStatus] = useState("");
-  const [assignedDate, setAssignedDate] = useState("");
+  const api = async (path, options = {}) => {
+    const res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: { Authorization: `Bearer ${user?.access_token}`, "Content-Type": "application/json" },
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* no body */ }
+    if (!res.ok) throw new Error(typeof data?.detail === "string" ? data.detail : "Something went wrong.");
+    return data;
+  };
 
-  const [editingId, setEditingId] = useState(null);
-
-  // ==================== FETCH PROJECTS ====================
-
-  const fetchProjects = async () => {
+  const load = async () => {
     try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/project-guides"
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        alert(data.detail || "Failed to fetch projects");
-        return;
-      }
-
-      setProjects(data);
-    } catch (error) {
-      console.error("Error fetching projects:", error);
+      setBatches(await api("/project-guides/overview"));
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setLoading(false);
     }
   };
 
-  // ==================== FETCH STUDENTS ====================
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
-  const fetchStudents = async () => {
+  const allocate = async (batch, reset) => {
+    if (reset && !window.confirm(
+      `All students of ${batch.batch_name} will be redistributed equally. Guides may change (project titles are kept). Continue?`)) return;
     try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/students"
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        alert(data.detail || "Failed to fetch students");
-        return;
-      }
-
-      setStudents(data);
-    } catch (error) {
-      console.error("Error fetching students:", error);
-    }
-  };
-
-  // ==================== FETCH TEACHERS ====================
-
-  const fetchTeachers = async () => {
-    try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/teachers"
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        alert(data.detail || "Failed to fetch teachers");
-        return;
-      }
-
-      setTeachers(data);
-    } catch (error) {
-      console.error("Error fetching teachers:", error);
-    }
-  };
-
-  // ==================== LOAD DATA ====================
-
-  useEffect(() => {
-    fetchProjects();
-    fetchStudents();
-    fetchTeachers();
-  }, []);
-
-  // ==================== ADD / UPDATE ====================
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    if (
-      !studentId ||
-      !guideTeacherId ||
-      !projectTitle ||
-      !projectStatus ||
-      !assignedDate
-    ) {
-      alert("Please fill all fields");
-      return;
-    }
-
-    try {
-      const queryParams =
-        `student_id=${studentId}` +
-        `&guide_teacher_id=${guideTeacherId}` +
-        `&project_title=${encodeURIComponent(projectTitle)}` +
-        `&project_status=${encodeURIComponent(projectStatus)}` +
-        `&assigned_date=${assignedDate}`;
-
-      const url = editingId
-        ? `http://127.0.0.1:8000/project-guides/${editingId}?${queryParams}`
-        : `http://127.0.0.1:8000/project-guides?${queryParams}`;
-
-      const response = await fetch(url, {
-        method: editingId ? "PUT" : "POST",
+      setBusy(batch.batch_id); setMsg(null);
+      const r = await api("/project-guides/auto-allocate", {
+        method: "POST", body: JSON.stringify({ batch_id: batch.batch_id, reset }),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        alert(data.detail || "Something went wrong");
-        return;
-      }
-
-      alert(
-        editingId
-          ? "Project guide updated successfully"
-          : "Project guide added successfully"
-      );
-
-      clearForm();
-      fetchProjects();
-    } catch (error) {
-      console.error("Error:", error);
-      alert("Server error");
-    }
+      setMsg({ type: "ok", text: `${batch.batch_name}: ${r.assigned_now} student(s) assigned.` });
+      await load();
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally { setBusy(null); }
   };
 
-  // ==================== EDIT ====================
-
-  const handleEdit = (project) => {
-    setEditingId(project.project_id);
-
-    setStudentId(project.student_id);
-    setGuideTeacherId(project.guide_teacher_id);
-    setProjectTitle(project.project_title);
-    setProjectStatus(project.project_status);
-    setAssignedDate(project.assigned_date);
-  };
-
-  // ==================== DELETE ====================
-
-  const handleDelete = async (id) => {
-    const confirmDelete = window.confirm(
-      "Are you sure you want to delete this project guide?"
-    );
-
-    if (!confirmDelete) {
-      return;
-    }
-
+  const reassign = async (projectId, guideId) => {
     try {
-      const response = await fetch(
-        `http://127.0.0.1:8000/project-guides/${id}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        alert(data.detail || "Delete failed");
-        return;
-      }
-
-      alert("Project guide deleted successfully");
-
-      fetchProjects();
-    } catch (error) {
-      console.error("Error deleting project:", error);
-      alert("Server error");
-    }
+      setMsg(null);
+      await api(`/project-guides/${projectId}/guide`, {
+        method: "PUT", body: JSON.stringify({ guide_teacher_id: Number(guideId) }),
+      });
+      await load();
+    } catch (e) { setMsg({ type: "error", text: e.message }); }
   };
 
-  // ==================== CLEAR FORM ====================
-
-  const clearForm = () => {
-    setEditingId(null);
-    setStudentId("");
-    setGuideTeacherId("");
-    setProjectTitle("");
-    setProjectStatus("");
-    setAssignedDate("");
-  };
-
-  // ==================== UI ====================
+  if (loading) return <div style={{ padding: 30 }}>Loading project guides…</div>;
 
   return (
-    <div style={{ padding: "30px" }}>
-      <h1>Project Guides</h1>
+    <div style={{ padding: "28px 32px 64px", maxWidth: 1100, margin: "0 auto", color: C.text }}>
+      <h1 style={{ margin: 0, fontSize: 26 }}>Project Guides</h1>
+      <p style={{ margin: "4px 0 22px", fontSize: 14, color: C.muted }}>
+        BCA Semester 5 (Mini Project) and BCA Semester 6 (Major Project). Students are distributed equally among the guide teachers.
+      </p>
 
-      <p>Manage student projects and project guides</p>
+      {msg && (
+        <div style={{
+          padding: "10px 14px", marginBottom: 16, borderRadius: 8, fontSize: 14,
+          background: msg.type === "ok" ? "#dcfce7" : "#fee2e2",
+          color: msg.type === "ok" ? "#166534" : "#991b1b",
+        }}>{msg.text}</div>
+      )}
 
-      {/* ==================== FORM ==================== */}
-
-      <form onSubmit={handleSubmit} style={{ marginBottom: "30px" }}>
-        {/* Student */}
-
-        <div style={{ marginBottom: "10px" }}>
-          <label>Student: </label>
-
-          <select
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
-          >
-            <option value="">Select Student</option>
-
-            {students.map((student) => (
-              <option
-                key={student.student_id}
-                value={student.student_id}
-              >
-                {student.student_name} - {student.roll_number}
-              </option>
-            ))}
-          </select>
+      {batches.length === 0 && (
+        <div style={{ ...card, color: C.muted }}>
+          No eligible batch found. The batch name must start with "BCA" and the semester must be 5 or 6.
         </div>
+      )}
 
-        {/* Guide Teacher */}
-
-        <div style={{ marginBottom: "10px" }}>
-          <label>Guide Teacher: </label>
-
-          <select
-            value={guideTeacherId}
-            onChange={(e) => setGuideTeacherId(e.target.value)}
-          >
-            <option value="">Select Guide Teacher</option>
-
-            {teachers.map((teacher) => (
-              <option
-                key={teacher.teacher_id}
-                value={teacher.teacher_id}
-              >
-                {teacher.teacher_name}
-              </option>
-            ))}
-          </select>
+      {batches.length === 1 && (
+        <div style={{ ...card, color: C.warn, fontSize: 13 }}>
+          Only one eligible batch found. If you expected both Semester 5 and Semester 6, add the missing batch on the Batches page.
         </div>
+      )}
 
-        {/* Project Title */}
-
-        <div style={{ marginBottom: "10px" }}>
-          <label>Project Title: </label>
-
-          <input
-            type="text"
-            placeholder="Enter project title"
-            value={projectTitle}
-            onChange={(e) => setProjectTitle(e.target.value)}
-          />
-        </div>
-
-        {/* Project Status */}
-
-        <div style={{ marginBottom: "10px" }}>
-          <label>Project Status: </label>
-
-          <select
-            value={projectStatus}
-            onChange={(e) => setProjectStatus(e.target.value)}
-          >
-            <option value="">Select Status</option>
-            <option value="Assigned">Assigned</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Completed">Completed</option>
-          </select>
-        </div>
-
-        {/* Assigned Date */}
-
-        <div style={{ marginBottom: "10px" }}>
-          <label>Assigned Date: </label>
-
-          <input
-            type="date"
-            value={assignedDate}
-            onChange={(e) => setAssignedDate(e.target.value)}
-          />
-        </div>
-
-        {/* Buttons */}
-
-        <button type="submit">
-          {editingId ? "Update Project" : "Add Project"}
-        </button>
-
-        {editingId && (
-          <button
-            type="button"
-            onClick={clearForm}
-            style={{ marginLeft: "10px" }}
-          >
-            Cancel
-          </button>
-        )}
-      </form>
-
-      {/* ==================== TABLE ==================== */}
-
-      <table
-        border="1"
-        cellPadding="10"
-        style={{ borderCollapse: "collapse" }}
-      >
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Student</th>
-            <th>Roll Number</th>
-            <th>Guide Teacher</th>
-            <th>Project Title</th>
-            <th>Status</th>
-            <th>Assigned Date</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {projects.map((project) => (
-            <tr key={project.project_id}>
-              <td>{project.project_id}</td>
-
-              <td>{project.student_name}</td>
-
-              <td>{project.roll_number}</td>
-
-              <td>{project.guide_teacher}</td>
-
-              <td>{project.project_title}</td>
-
-              <td>{project.project_status}</td>
-
-              <td>{project.assigned_date}</td>
-
-              <td>
-                <button onClick={() => handleEdit(project)}>
-                  Edit
+      {batches.map((b) => (
+        <div key={b.batch_id} style={card}>
+          <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>
+                {b.batch_name}{" "}
+                <span style={{
+                  fontSize: 11, padding: "3px 9px", borderRadius: 20, marginLeft: 6,
+                  background: b.project_type === "major" ? "#ede9fe" : "#dbeafe",
+                  color: b.project_type === "major" ? "#6d28d9" : "#1d4ed8",
+                }}>
+                  {b.project_type === "major" ? "MAJOR PROJECT" : "MINI PROJECT"}
+                </span>
+              </div>
+              <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>
+                Semester {b.semester} · {b.assigned}/{b.total_students} students assigned · {b.eligible_guides.length} guides
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {b.unassigned.length > 0 && (
+                <button style={btn(C.accent)} disabled={busy === b.batch_id} onClick={() => allocate(b, false)}>
+                  {busy === b.batch_id ? "Assigning…" : `Assign ${b.unassigned.length} student(s) equally`}
                 </button>
-
-                <button
-                  onClick={() =>
-                    handleDelete(project.project_id)
-                  }
-                  style={{ marginLeft: "8px" }}
-                >
-                  Delete
+              )}
+              {b.assigned > 0 && (
+                <button style={btn(C.faint, C.accent)} disabled={busy === b.batch_id} onClick={() => allocate(b, true)}>
+                  Re-balance
                 </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              )}
+            </div>
+          </div>
+
+          {b.total_students === 0 && (
+            <p style={{ fontSize: 13, color: C.warn, marginTop: 14 }}>
+              This batch has no students yet. Add students from the Students page first.
+            </p>
+          )}
+
+          <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
+            {b.guides.map((g) => {
+              const key = `${b.batch_id}-${g.teacher_id}`;
+              const pct = b.total_students ? (g.count * 100) / b.total_students : 0;
+              return (
+                <div key={key} style={{ border: `1px solid ${g.not_eligible ? C.warn : C.border}`, borderRadius: 10, padding: "12px 16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>
+                      👨‍🏫 {g.teacher_name} <span style={{ color: C.muted, fontWeight: 400 }}>· {g.count} student(s)</span>
+                      {g.not_eligible && (
+                        <span style={{ color: C.warn, fontWeight: 400, fontSize: 12 }}> · no longer a guide (use Re-balance)</span>
+                      )}
+                    </div>
+                    <button style={btn(C.faint, C.accent)} onClick={() => setOpen({ ...open, [key]: !open[key] })}>
+                      {open[key] ? "Hide ▲" : "Show students ▼"}
+                    </button>
+                  </div>
+                  <div style={{ height: 6, background: "#e2e8f0", borderRadius: 6, marginTop: 8 }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: C.ok, borderRadius: 6 }} />
+                  </div>
+
+                  {open[key] && (
+                    <table style={{ width: "100%", marginTop: 12, fontSize: 13, borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: C.muted }}>
+                          <th style={{ padding: 6 }}>Roll</th><th>Student</th><th>Project title</th><th>Change guide</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.students.map((s) => (
+                          <tr key={s.student_id} style={{ borderTop: `1px solid ${C.border}` }}>
+                            <td style={{ padding: 6 }}>{s.roll_number}</td>
+                            <td>{s.student_name}</td>
+                            <td>{s.project_title}</td>
+                            <td>
+                              <select value={g.teacher_id} onChange={(e) => reassign(s.project_id, e.target.value)}>
+                                {g.not_eligible && (
+                                  <option value={g.teacher_id} disabled>{g.teacher_name}</option>
+                                )}
+                                {b.eligible_guides.map((t) => (
+                                  <option key={t.teacher_id} value={t.teacher_id}>{t.teacher_name}</option>
+                                ))}
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                        {g.students.length === 0 && (
+                          <tr><td colSpan={4} style={{ padding: 8, color: C.muted }}>No students.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {b.unassigned.length > 0 && (
+            <p style={{ fontSize: 13, color: C.warn, marginTop: 14 }}>
+              Without a guide: {b.unassigned.map((s) => s.student_name).join(", ")}
+            </p>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
+
 export default ProjectGuides;

@@ -20,11 +20,22 @@ export default function RoleLayout({ role }) {
   const accent = ACCENT[role] || "#1e293b";
   const base = `/${role}`;
 
+  
   const links = [
     { to: `${base}/dashboard`, icon: "🏠", label: "Dashboard" },
     { to: `${base}/syllabus`, icon: "📖", label: "Syllabus" },
-    { to: `${base}/profile`, icon: "👤", label: "Profile" },
-  ];
+
+  // Teacher-only links
+    ...(role === "teacher"
+    ? [
+        { to: `${base}/notes`, icon: "📚", label: "Notes" },
+        { to: `${base}/pyqs`, icon: "📝", label: "PYQs" },
+      ]
+    : []),
+
+  { to: `${base}/profile`, icon: "👤", label: "Profile" },
+];
+
 
   return (
     <div className="role-shell">

@@ -17,11 +17,14 @@ from app.database import get_db_connection
 # IMPORTANT: change this to a long random string before you deploy anywhere
 # public. For a college project running on localhost this is fine as-is.
 import os
+import secrets
+import hashlib
 
 # JWT secret – read from environment (must be set in Render secrets)
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-this-to-a-long-random-string")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # tokens stay valid for 1 day
+RESET_TOKEN_EXPIRE_MINUTES = 15  # password reset link valid for 15 minutes
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -40,6 +43,99 @@ def create_access_token(data: dict) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def _hash_reset_token(token: str) -> str:
+    """Convert the raw reset token into a SHA-256 hash for DB storage."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_password_reset_token(user_id: int) -> str:
+    """
+    Create a secure random password-reset token, store only its hash
+    in the database, and return the raw token for sending by email.
+    """
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_reset_token(raw_token)
+
+    expires_at = datetime.utcnow() + timedelta(
+        minutes=RESET_TOKEN_EXPIRE_MINUTES
+    )
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO password_reset_tokens
+                (user_id, token_hash, expires_at)
+            VALUES
+                (%s, %s, %s)
+            """,
+            (user_id, token_hash, expires_at),
+        )
+        connection.commit()
+    finally:
+        cursor.close()
+        connection.close()
+
+    return raw_token
+
+
+def get_valid_password_reset_token(token: str):
+    """
+    Find a password-reset token that:
+    - matches the SHA-256 hash
+    - has not been used
+    - has not expired
+    """
+    token_hash = _hash_reset_token(token)
+    now = datetime.utcnow()
+
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                reset_id,
+                user_id,
+                expires_at,
+                used_at
+            FROM password_reset_tokens
+            WHERE token_hash = %s
+            AND used_at IS NULL
+            AND expires_at > %s
+            """,
+            (token_hash, now),
+        )
+
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        connection.close()
+
+
+def mark_password_reset_token_used(reset_id: int):
+    """Mark a reset token as consumed after the password is changed."""
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            """
+            UPDATE password_reset_tokens
+            SET used_at = %s
+            WHERE reset_id = %s
+            AND used_at IS NULL
+            """,
+            (datetime.utcnow(), reset_id),
+        )
+        connection.commit()
+    finally:
+        cursor.close()
+        connection.close()
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
