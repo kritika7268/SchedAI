@@ -8,6 +8,7 @@ const SUGGESTIONS = [
   "Show today's timetable",
   "What is my next class?",
   "Who is my project guide?",
+  "When is my next exam?",
   "What is my syllabus progress?",
   "Any holiday coming up?",
 ];
@@ -15,7 +16,7 @@ const SUGGESTIONS = [
 const GREETING = {
   role: "assistant",
   content:
-    "Hi! I'm SchedAI Assistant 👋 Ask me about your timetable, next class, project guide, syllabus progress or holidays.",
+    "Hi! I'm SchedAI Assistant 👋 Ask me about your timetable, next class, project guide, exams, syllabus progress or holidays.",
 };
 
 /**
@@ -38,7 +39,11 @@ export default function StudentChatbot() {
     const question = (text ?? input).trim();
     if (!question || loading) return;
 
-    const history = messages.slice(1).map((m) => ({ role: m.role, content: m.content }));
+    const history = messages
+      .slice(1)
+      .filter((m) => !m.error)                                   // do not send error bubbles back
+      .slice(-8)
+      .map((m) => ({ role: m.role, content: String(m.content).slice(0, 1500) }));
     setMessages((m) => [...m, { role: "user", content: question }]);
     setInput("");
     setLoading(true);
@@ -61,10 +66,11 @@ export default function StudentChatbot() {
           res.status === 401 ? "Your session has expired. Please log in again."
           : res.status === 429 ? "You're sending messages too fast. Please wait a minute."
           : typeof data?.detail === "string" ? data.detail
+          : res.status === 422 ? "The chat message was not accepted. Please refresh the page and try again."
           : "Something went wrong. Please try again.";
         throw new Error(msg);
       }
-      setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
+      setMessages((m) => [...m, { role: "assistant", content: data.reply, basic: data.source === "fallback" }]);
     } catch (e) {
       setMessages((m) => [
         ...m,
@@ -127,6 +133,11 @@ export default function StudentChatbot() {
                   }}
                 >
                   {m.content}
+                  {m.basic && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: "#b45309" }}>
+                      ⚠ Basic mode: the AI service is not responding.
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

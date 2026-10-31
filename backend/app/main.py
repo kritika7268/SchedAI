@@ -24,6 +24,11 @@ import smtplib
 import secrets
 import hmac
 import hashlib
+import asyncio
+from fastapi.security import OAuth2PasswordBearer
+from jose import jwt, JWTError
+from app.auth import SECRET_KEY, ALGORITHM
+from app.exams import generate_daily_reminders
 
 from email.message import EmailMessage
 
@@ -47,9 +52,26 @@ from app.file_checks import (
     read_valid_pdf, save_pdf,
     check_subject_matches_batch, check_teacher_owns_subject,
 )
+from app.ai_assistant import router as ai_assistant_router
+app.include_router(ai_assistant_router)
 
 from app.exams import router as exams_router, exam_week_containing
 app.include_router(exams_router)
+async def _exam_reminder_loop():
+    # runs at startup and then every hour; the dedupe key keeps it to one per day
+    while True:
+        try:
+            created = await run_in_threadpool(generate_daily_reminders)
+            if created:
+                print(f"Exam reminders created: {created}")
+        except Exception as e:
+            print("Exam reminder job failed:", e)
+        await asyncio.sleep(3600)
+
+
+@app.on_event("startup")
+async def start_exam_reminders():
+    asyncio.create_task(_exam_reminder_loop())
 
 # ============================================================
 # PASSWORD RESET OTP REQUEST MODEL
@@ -2367,7 +2389,11 @@ def get_admin_dashboard_stats():
             "SELECT COUNT(*) AS c FROM timetables WHERE day_of_week = %s",
             (today_day_name,)
         )
-        classes_suspended = bool(exam_week_containing(cursor, today.date()))
+        cursor.execute(
+            "SELECT 1 FROM holidays WHERE %s BETWEEN holiday_date AND COALESCE(end_date, holiday_date) LIMIT 1",
+            (today.date(),))
+        holiday_today = cursor.fetchone() is not None
+        classes_suspended = holiday_today or bool(exam_week_containing(cursor, today.date()))
         if classes_suspended:
             todays_classes = 0
 
@@ -4358,44 +4384,71 @@ def delete_event(event_id: int):
 
 # ==================== Notification history ====================
 
+_optional_oauth = OAuth2PasswordBearer(tokenUrl="login", auto_error=False)
+
+
+def get_optional_user(token: Optional[str] = Depends(_optional_oauth)):
+    """Returns the logged-in user, or None if there is no valid token."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    conn = get_db_connection()
+    cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT * FROM users WHERE user_id = %s", (payload.get("user_id"),))
+        return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+
 @app.get("/notifications")
-def get_notifications(role: str = "all", limit: int = 30):
-    """
-    Returns recent notifications for the selected role.
-    """
+def get_notifications(role: str = "all", limit: int = 30,
+                      current_user: Optional[dict] = Depends(get_optional_user)):
+    """Recent notifications. Students see their own batch's, teachers their own duty's."""
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
     try:
-        if role == "all":
-            cursor.execute(
-                """
-                SELECT *
-                FROM notifications
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (limit,)
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT *
-                FROM notifications
-                WHERE audience IN ('all', %s)
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (role, limit)
-            )
+        if current_user:
+            role = current_user["role"]
 
+        conds, params = [], []
+        if role != "all":
+            conds.append("audience IN ('all', %s)")
+            params.append(role)
+
+        batch_id = None
+        if role == "student" and current_user and current_user.get("student_id"):
+            cursor.execute("SELECT batch_id FROM students WHERE student_id = %s",
+                           (current_user["student_id"],))
+            row = cursor.fetchone()
+            batch_id = row["batch_id"] if row else None
+
+        if role == "student" and batch_id is not None:
+            conds.append("(batch_id IS NULL OR batch_id = %s)")
+            params.append(batch_id)
+            conds.append("teacher_id IS NULL")
+        elif role == "teacher" and current_user and current_user.get("teacher_id"):
+            conds.append("batch_id IS NULL")
+            conds.append("(teacher_id IS NULL OR teacher_id = %s)")
+            params.append(current_user["teacher_id"])
+        else:
+            conds.append("batch_id IS NULL")
+            conds.append("teacher_id IS NULL")
+
+        where = " WHERE " + " AND ".join(conds) if conds else ""
+        cursor.execute(
+            f"SELECT * FROM notifications{where} ORDER BY created_at DESC LIMIT %s",
+            tuple(params) + (limit,))
         rows = cursor.fetchall()
 
         for r in rows:
             if r["created_at"]:
-                r["created_at"] = r["created_at"].strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+                r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
 
         return rows
 

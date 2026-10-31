@@ -7,6 +7,8 @@ import NotificationBell from "./NotificationBell";
 import MyProjectStudents from "./MyProjectStudents";
 import MyExams from "./MyExams";
 import { useExamWeek, ExamWeekBanner } from "./ExamWeek";
+import useTodayHoliday from "./useTodayHoliday";
+import ExamReminders from "./ExamReminders";
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -137,7 +139,8 @@ export default function TeacherDashboard() {
   const { user } = useAuth();
   const teacherId = user?.teacher_id;
   const examWeek = useExamWeek();
-  const classesSuspended = !!examWeek?.active;
+  const holidayToday = useTodayHoliday();
+  const classesSuspended = !!examWeek?.active || !!holidayToday;
   const [timetables, setTimetables] = useState([]);
   const [absences,   setAbsences]   = useState([]);
   const [loading,    setLoading]     = useState(true);
@@ -257,6 +260,7 @@ export default function TeacherDashboard() {
         {/* ── HOLIDAY NOTIFICATIONS ── */}
         <HolidayBanner />
         <ExamWeekBanner week={examWeek} />
+                <ExamReminders />
 
         {loading ? (
           <div style={{ color:C.muted, fontSize:15, paddingTop:40, textAlign:"center" }}>

@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import StudentChatbot from "./StudentChatbot";
 
 const ACCENT = { teacher: "#2563eb", student: "#7c3aed" };
 const ROLE_LABEL = { teacher: "Teacher", student: "Student" };
@@ -119,6 +120,9 @@ export default function RoleLayout({ role }) {
       <main className="role-main">
         <Outlet />
       </main>
+
+      {/* AI assistant: floating chat, students only */}
+      {role === "student" && <StudentChatbot />}
     </div>
   );
 }

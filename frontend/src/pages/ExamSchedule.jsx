@@ -181,10 +181,10 @@ export default function ExamSchedule() {
     catch (e) { setMsg({ type: "error", text: e.message }); }
   };
 
-  const changeInvigilator = async (examId, teacherId) => {
+  const changeInvigilator = async (examId, teacherId, slot) => {
     try {
       setMsg(null);
-      await api(`/exams/${examId}/invigilator`, { method: "PUT", body: JSON.stringify({ teacher_id: Number(teacherId) }) });
+      await api(`/exams/${examId}/invigilator`, { method: "PUT", body: JSON.stringify({ teacher_id: Number(teacherId), slot }) });
     } catch (e) { setMsg({ type: "error", text: e.message }); }
     await load();
   };
@@ -198,7 +198,7 @@ export default function ExamSchedule() {
     rows.forEach((r) => { (m[`${r.batch_name}|${r.exam_date}`] = m[`${r.batch_name}|${r.exam_date}`] || []).push(r); });
     return m;
   }, [rows]);
-  const invCount = new Set(rows.map((r) => r.invigilator_id)).size;
+  const invCount = new Set(rows.flatMap((r) => [r.invigilator_id, r.invigilator2_id].filter(Boolean))).size;
   const maxDay = Math.max(1, ...byDate.map((g) => g.items.length));
   const maxDuties = Math.max(1, ...summary.map((s) => s.duties));
 
@@ -391,12 +391,18 @@ export default function ExamSchedule() {
                             <td style={{ fontWeight: 600 }}>{r.batch_name}</td>
                             <td>{r.subject_name} <span style={{ color: C.muted }}>({r.subject_code})</span></td>
                             <td>{r.room_name}{r.room_type ? <span style={{ color: C.muted }}> · {r.room_type}</span> : ""}</td>
-                            <td>
+                                                        <td>
                               {isAdmin ? (
-                                <select value={r.invigilator_id} onChange={(e) => changeInvigilator(r.exam_id, e.target.value)} style={{ ...input, padding: "4px 8px", fontSize: 13 }}>
-                                  {teachers.map((t) => <option key={t.teacher_id} value={t.teacher_id}>{t.teacher_name}</option>)}
-                                </select>
-                              ) : <>👨‍🏫 {r.invigilator_name}</>}
+                                [[r.invigilator_id, 1], [r.invigilator2_id, 2]].filter(([id]) => id).map(([id, slot]) => (
+                                  <div key={slot} style={{ marginBottom: 4 }}>
+                                    <select value={id} onChange={(e) => changeInvigilator(r.exam_id, e.target.value, slot)} style={{ ...input, padding: "4px 8px", fontSize: 13 }}>
+                                      {teachers.map((t) => <option key={t.teacher_id} value={t.teacher_id}>{t.teacher_name}</option>)}
+                                    </select>
+                                  </div>
+                                ))
+                              ) : (
+                                r.invigilator_names.map((n) => <div key={n}>👨‍🏫 {n}</div>)
+                              )}
                             </td>
                           </tr>
                         ))}

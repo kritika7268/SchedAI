@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 from datetime import date, datetime, time as dtime, timedelta
 from typing import Literal, Optional
 from xml.sax.saxutils import escape
@@ -36,9 +37,10 @@ SESSIONS = [
     {"no": 2, "start": "11:30:00", "end": "12:30:00"},
 ]
 
-# Used when the external file has no start_time / end_time
-DEFAULT_EXT_START = dtime(10, 0)
-DEFAULT_EXT_END = dtime(13, 0)
+# Used when the external file has no start_time / end_time (3 hours)
+DEFAULT_EXT_START = dtime(9, 0)
+DEFAULT_EXT_END = dtime(12, 0)
+EXTERNAL_INVIGILATORS = 2        # invigilators per room in external exams
 
 SOLVER_SECONDS = 20
 EXTERNAL_COLUMNS = ["batch_name", "subject_code", "exam_date", "start_time", "end_time", "room_name"]
@@ -53,6 +55,7 @@ class GenerateIn(BaseModel):
 
 class InvigilatorIn(BaseModel):
     teacher_id: int
+    slot: int = 1                         # 1 = first invigilator, 2 = second
 
 
 # ------------------------------------------------------------
@@ -100,20 +103,34 @@ def _tmins(v):
     return int(p[0]) * 60 + int(p[1])
 
 
+def _is_practical(subject) -> bool:
+    """A subject is practical if 'lab' or 'practical' is in its name or required room type."""
+    text = f"{subject.get('subject_name') or ''} {subject.get('room_type_required') or ''}".lower()
+    return bool(re.search(r"\blab\b|practical", text))
+
+
 def _overlap(s1, e1, s2, e2) -> bool:
     return s1 < e2 and s2 < e1
 
 
 def exam_week_containing(cur, d: date):
-    """{'week_start','week_end'} if d falls in a week that has exams, else None.
+    """Dates when regular classes are suspended.
+    Internal: the whole Mon-Fri week. External: first to last external exam date.
     `cur` must be a dictionary cursor."""
     cur.execute(
         "SELECT DISTINCT DATE_SUB(exam_date, INTERVAL WEEKDAY(exam_date) DAY) AS wk "
-        "FROM exam_schedule")
+        "FROM exam_schedule WHERE exam_round <> 'external'")
     for r in cur.fetchall():
         wk = _as_date(r["wk"])
         if wk <= d <= wk + timedelta(days=4):
             return {"week_start": wk, "week_end": wk + timedelta(days=4)}
+    cur.execute("SELECT MIN(exam_date) AS a, MAX(exam_date) AS b "
+                "FROM exam_schedule WHERE exam_round = 'external'")
+    r = cur.fetchone()
+    if r and r["a"]:
+        a, b = _as_date(r["a"]), _as_date(r["b"])
+        if a <= d <= b:
+            return {"week_start": a, "week_end": b}
     return None
 
 
@@ -134,23 +151,26 @@ def _holiday_days(cur, week_start: date, week_end: date):
 
 def _assign_invigilators(items, teachers, absent, own):
     """
-    items:   [{"date": date, "start": minutes, "end": minutes, "subject_id": int}]
+    items:   [{"date", "start": minutes, "end": minutes, "subject_id", "need": 1 or 2}]
     teachers:{teacher_id: name}   absent: {(teacher_id, date)}   own: {subject_id: {teacher_id}}
-    One invigilator per item. Nobody works two overlapping papers.
-    Duties are shared as equally as possible (min max-min difference).
-    Returns (list of teacher_id per item, list of teachers who could take duty).
+    Each paper gets `need` invigilators. Nobody works two overlapping papers.
+    Duties are shared as equally as possible.
+    Returns (list of [teacher_ids] per item, list of teachers who could take duty).
     """
     tids = list(teachers)
     N = len(items)
     m = cp_model.CpModel()
     w = {}
     for i, it in enumerate(items):
+        need = it.get("need", 1)
         ok = [t for t in tids if (t, it["date"]) not in absent]
-        if not ok:
-            raise HTTPException(400, f"No teacher is available on {it['date']}.")
+        if len(ok) < need:
+            raise HTTPException(
+                400, f"Only {len(ok)} teacher(s) are available on {it['date']}, "
+                     f"but {need} invigilator(s) are needed per room.")
         for t in ok:
             w[i, t] = m.NewBoolVar(f"w_{i}_{t}")
-        m.Add(sum(w[i, t] for t in ok) == 1)
+        m.Add(sum(w[i, t] for t in ok) == need)
 
     by_date = {}
     for i, it in enumerate(items):
@@ -166,8 +186,8 @@ def _assign_invigilators(items, teachers, absent, own):
                             m.Add(w[i, t] + w[j, t] <= 1)
 
     eligible = [t for t in tids if any((i, t) in w for i in range(N))]
-    mx = m.NewIntVar(0, N, "mx")
-    mn = m.NewIntVar(0, N, "mn")
+    mx = m.NewIntVar(0, 2 * N, "mx")
+    mn = m.NewIntVar(0, 2 * N, "mn")
     for t in eligible:
         duty_t = sum(w[i, t] for i in range(N) if (i, t) in w)
         m.Add(duty_t <= mx)
@@ -191,12 +211,12 @@ def _assign_invigilators(items, teachers, absent, own):
     if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise HTTPException(
             400, "Could not assign invigilators. There are not enough free teachers for papers "
-                 "held at the same time (check teacher absences).")
+                 "held at the same time. Move some papers to a different time, or check teacher absences.")
 
-    result = [None] * N
+    result = [[] for _ in range(N)]
     for (i, t), var in w.items():
         if s.Value(var):
-            result[i] = t
+            result[i].append(t)
     return result, eligible
 
 
@@ -249,17 +269,23 @@ def _find_conflicts(cur, exam_round=None):
     cur.execute(
         """SELECT e.exam_id, e.exam_round, e.exam_date, e.start_time, e.end_time,
                   e.batch_id, b.batch_name, e.room_id, r.room_name, r.capacity,
-                  e.invigilator_id, t.teacher_name, s.subject_name
+                  e.invigilator_id, t.teacher_name,
+                  e.invigilator2_id, t2.teacher_name AS teacher2_name,
+                  s.subject_name
            FROM exam_schedule e
            JOIN batches b ON e.batch_id = b.batch_id
            JOIN rooms r ON e.room_id = r.room_id
            JOIN teachers t ON e.invigilator_id = t.teacher_id
+           LEFT JOIN teachers t2 ON e.invigilator2_id = t2.teacher_id
            JOIN subjects s ON e.subject_id = s.subject_id""")
     rows = cur.fetchall()
     for r in rows:
         r["date"] = _as_date(r["exam_date"])
         r["s"] = _tmins(r["start_time"])
         r["e"] = _tmins(r["end_time"])
+        r["invs"] = [(r["invigilator_id"], r["teacher_name"])]
+        if r["invigilator2_id"]:
+            r["invs"].append((r["invigilator2_id"], r["teacher2_name"]))
 
     cur.execute("SELECT batch_id, COUNT(*) AS c FROM students GROUP BY batch_id")
     counts = {x["batch_id"]: x["c"] for x in cur.fetchall()}
@@ -286,14 +312,17 @@ def _find_conflicts(cur, exam_round=None):
             if a["room_id"] == b["room_id"]:
                 found.append({"type": "Room clash",
                               "detail": f"{a['room_name']} is used twice at the same time: {tag(a)} and {tag(b)}"})
-            if a["invigilator_id"] == b["invigilator_id"]:
-                found.append({"type": "Invigilator clash",
-                              "detail": f"{a['teacher_name']} has two duties at the same time: {tag(a)} and {tag(b)}"})
+            names = {tid: n for tid, n in a["invs"]}
+            for tid, _n in b["invs"]:
+                if tid in names:
+                    found.append({"type": "Invigilator clash",
+                                  "detail": f"{names[tid]} has two duties at the same time: {tag(a)} and {tag(b)}"})
 
     for r in scope:
-        if (r["invigilator_id"], r["date"]) in absent:
-            found.append({"type": "Invigilator absent",
-                          "detail": f"{r['teacher_name']} is marked absent on {r['date']} but has duty: {tag(r)}"})
+        for tid, name in r["invs"]:
+            if (tid, r["date"]) in absent:
+                found.append({"type": "Invigilator absent",
+                              "detail": f"{name} is marked absent on {r['date']} but has duty: {tag(r)}"})
         size = counts.get(r["batch_id"], 0)
         if size > int(r["capacity"] or 0):
             found.append({"type": "Room too small",
@@ -382,6 +411,7 @@ def _generate_sync(body: GenerateIn):
                 papers.append({
                     "batch_id": b["batch_id"], "subject": s, "size": size,
                     "needs_lab": "lab" in str(s.get("room_type_required") or "").lower(),
+                    "practical": _is_practical(s),
                 })
         if not papers:
             raise HTTPException(400, "No batch has subjects, so no exam can be scheduled.")
@@ -389,61 +419,84 @@ def _generate_sync(body: GenerateIn):
         KS = range(len(SESSIONS))
 
         # ============ STAGE 1: papers -> (day, session), balanced ============
-        m1 = cp_model.CpModel()
-        x = {(i, d, k): m1.NewBoolVar(f"x_{i}_{d}_{k}")
-             for i in range(P) for d in range(D) for k in KS}
-        for i in range(P):
-            m1.Add(sum(x[i, d, k] for d in range(D) for k in KS) == 1)
-
         by_batch = {}
         for i, p in enumerate(papers):
             by_batch.setdefault(p["batch_id"], []).append(i)
+        sizes = sorted({p["size"] for p in papers})
 
-        # every batch gets its papers spread evenly over the days
-        shortfalls = []
-        for idxs in by_batch.values():
-            n = len(idxs)
-            floor_n = n // D
+        def solve_stage1(hard):
+            """hard=True: every day gets the same number of papers (give or take one).
+            hard=False: soft balancing (used if the strict version is impossible)."""
+            m1 = cp_model.CpModel()
+            x = {(i, d, k): m1.NewBoolVar(f"x_{i}_{d}_{k}")
+                 for i in range(P) for d in range(D) for k in KS}
+            for i in range(P):
+                m1.Add(sum(x[i, d, k] for d in range(D) for k in KS) == 1)
+
+            shortfalls = []
+            same_type = []      # a day with two theory or two practical papers of one batch
+            for idxs in by_batch.values():
+                n = len(idxs)
+                lo_b, hi_b = n // D, -(-n // D)
+                theory_idx = [i for i in idxs if not papers[i]["practical"]]
+                prac_idx = [i for i in idxs if papers[i]["practical"]]
+                for d in range(D):
+                    for k in KS:
+                        m1.Add(sum(x[i, d, k] for i in idxs) <= 1)      # one paper at a time
+                    day_total = sum(x[i, d, k] for i in idxs for k in KS)
+                    m1.Add(day_total <= max(hi_b, 1))
+                    if hard:
+                        m1.Add(day_total >= lo_b)
+                    elif lo_b > 0:
+                        sh = m1.NewIntVar(0, lo_b, f"sh_{len(shortfalls)}")
+                        m1.Add(day_total + sh >= lo_b)
+                        shortfalls.append(sh)
+
+                    # a second paper on the same day should be the other type
+                    if hi_b > 1:
+                        for group, tag in ((theory_idx, "t"), (prac_idx, "p")):
+                            if len(group) > 1:
+                                group_day = sum(x[i, d, k] for i in group for k in KS)
+                                extra = m1.NewIntVar(0, 2, f"same_{tag}_{len(same_type)}")
+                                m1.Add(group_day - 1 <= extra)
+                                same_type.append(extra)
+
+            day_load = [sum(x[i, d, k] for i in range(P) for k in KS) for d in range(D)]
+            max_day = m1.NewIntVar(0, P, "max_day")
+            min_day = m1.NewIntVar(0, P, "min_day")
+            for d in range(D):
+                m1.Add(day_load[d] <= max_day)
+                m1.Add(day_load[d] >= min_day)
+                if hard:
+                    m1.Add(day_load[d] >= P // D)
+                    m1.Add(day_load[d] <= -(-P // D))
+
+            peak = m1.NewIntVar(0, P, "peak")
             for d in range(D):
                 for k in KS:
-                    m1.Add(sum(x[i, d, k] for i in idxs) <= 1)    # one paper at a time
-                day_total = sum(x[i, d, k] for i in idxs for k in KS)
-                m1.Add(day_total <= (1 if n <= D else 2))
-                if floor_n > 0:                                   # "at least" is soft
-                    sh = m1.NewIntVar(0, floor_n, f"sh_{len(shortfalls)}")
-                    m1.Add(day_total + sh >= floor_n)
-                    shortfalls.append(sh)
+                    load = sum(x[i, d, k] for i in range(P))
+                    m1.Add(load <= len(avail[d]))                       # one teacher per room
+                    m1.Add(load <= peak)
+                    for sz in sizes:                                    # room capacity
+                        ge = [i for i in range(P) if papers[i]["size"] >= sz]
+                        room_ge = sum(1 for r in rooms if r["capacity"] >= sz)
+                        m1.Add(sum(x[i, d, k] for i in ge) <= room_ge)
 
-        # the whole department gets about the same number of papers every day
-        day_load = [sum(x[i, d, k] for i in range(P) for k in KS) for d in range(D)]
-        max_day = m1.NewIntVar(0, P, "max_day")
-        min_day = m1.NewIntVar(0, P, "min_day")
-        for d in range(D):
-            m1.Add(day_load[d] <= max_day)
-            m1.Add(day_load[d] >= min_day)
+            m1.Minimize(
+                5000 * sum(same_type)
+                + 1000 * (max_day - min_day)
+                + 200 * sum(shortfalls)
+                + 20 * peak
+                + sum(x[i, d, 1] for i in range(P) for d in range(D)))
 
-        sizes = sorted({p["size"] for p in papers})
-        peak = m1.NewIntVar(0, P, "peak")
-        for d in range(D):
-            for k in KS:
-                load = sum(x[i, d, k] for i in range(P))
-                m1.Add(load <= len(avail[d]))                     # one teacher per room
-                m1.Add(load <= peak)
-                for sz in sizes:                                  # room capacity check
-                    ge = [i for i in range(P) if papers[i]["size"] >= sz]
-                    room_ge = sum(1 for r in rooms if r["capacity"] >= sz)
-                    m1.Add(sum(x[i, d, k] for i in ge) <= room_ge)
+            s = cp_model.CpSolver()
+            s.parameters.max_time_in_seconds = SOLVER_SECONDS
+            s.parameters.num_workers = 4
+            return s, s.Solve(m1), x
 
-        m1.Minimize(
-            1000 * (max_day - min_day)
-            + 200 * sum(shortfalls)
-            + 20 * peak
-            + sum(x[i, d, 1] for i in range(P) for d in range(D)))
-
-        s1 = cp_model.CpSolver()
-        s1.parameters.max_time_in_seconds = SOLVER_SECONDS
-        s1.parameters.num_workers = 4
-        st1 = s1.Solve(m1)
+        s1, st1, x = solve_stage1(True)
+        if st1 not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            s1, st1, x = solve_stage1(False)
         if st1 not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             raise HTTPException(
                 400,
@@ -463,12 +516,13 @@ def _generate_sync(body: GenerateIn):
         for i, sl in slot_of.items():
             slots.setdefault(sl, []).append(i)
 
-        # ============ STAGE 2: invigilators, fair duty ============
+        # ============ STAGE 2: invigilators (1 per room), fair duty ============
         items = [{
             "date": days[slot_of[i][0]],
             "start": _mins(SESSIONS[slot_of[i][1]]["start"]),
             "end": _mins(SESSIONS[slot_of[i][1]]["end"]),
             "subject_id": papers[i]["subject"]["subject_id"],
+            "need": 1,
         } for i in range(P)]
         inv_of, eligible = _assign_invigilators(items, teachers, absent, own)
 
@@ -503,22 +557,28 @@ def _generate_sync(body: GenerateIn):
                 (f"{label} - {p['subject']['subject_name']}", body.exam_round,
                  p["batch_id"], p["subject"]["subject_id"], b["semester"], days[d],
                  SESSIONS[k]["no"], SESSIONS[k]["start"], SESSIONS[k]["end"],
-                 room_of[i]["room_id"], inv_of[i]))
+                 room_of[i]["room_id"], inv_of[i][0]))
         conn.commit()
         w_cur.close()
 
         duty = {t: 0 for t in teachers}
-        for t in inv_of:
-            duty[t] += 1
+        for ts in inv_of:
+            for t in ts:
+                duty[t] += 1
+
         double_days = []
         for bid, idxs in by_batch.items():
             per_batch_day = {}
             for i in idxs:
-                per_batch_day[slot_of[i][0]] = per_batch_day.get(slot_of[i][0], 0) + 1
-            for d, c in per_batch_day.items():
-                if c == 2:
-                    double_days.append(
-                        {"batch": batch_by_id[bid]["batch_name"], "date": days[d].isoformat()})
+                per_batch_day.setdefault(slot_of[i][0], []).append(i)
+            for d, group in per_batch_day.items():
+                if len(group) == 2:
+                    kinds = sorted(papers[i]["practical"] for i in group)
+                    double_days.append({
+                        "batch": batch_by_id[bid]["batch_name"],
+                        "date": days[d].isoformat(),
+                        "mix": "theory + practical" if kinds == [False, True] else "same type",
+                    })
 
         per_day = {d.isoformat(): 0 for d in days}
         for i in range(P):
@@ -564,7 +624,7 @@ async def generate_internal_timetable(body: GenerateIn,
 
 
 # ------------------------------------------------------------
-# EXTERNAL: import dates from a file, then assign room + invigilator
+# EXTERNAL: import dates from a file, then assign room + 2 invigilators
 # ------------------------------------------------------------
 def _parse_date(v):
     if isinstance(v, datetime):
@@ -775,7 +835,7 @@ def _import_external_sync(filename, data):
             raise HTTPException(
                 400, "The file has problems, so nothing was imported:\n- " + "\n- ".join(shown) + more)
 
-        # ---- invigilators ----
+        # ---- invigilators (2 per room) ----
         d_min = min(e["date"] for e in exams)
         d_max = max(e["date"] for e in exams)
         cur.execute(
@@ -786,28 +846,30 @@ def _import_external_sync(filename, data):
             if ex["subject"].get("teacher_id"):
                 own.setdefault(ex["subject"]["subject_id"], set()).add(ex["subject"]["teacher_id"])
         items = [{"date": e["date"], "start": e["s"], "end": e["e"],
-                  "subject_id": e["subject"]["subject_id"]} for e in exams]
+                  "subject_id": e["subject"]["subject_id"],
+                  "need": EXTERNAL_INVIGILATORS} for e in exams]
         inv_of, eligible = _assign_invigilators(items, teachers, absent, own)
 
         # ---- save (replace the old external schedule) ----
         cur.execute("DELETE FROM exam_schedule WHERE exam_round = 'external'")
         w = conn.cursor()
-        for ex, tid in zip(exams, inv_of):
+        for ex, tids in zip(exams, inv_of):
             w.execute(
                 """INSERT INTO exam_schedule
                    (exam_name, exam_type, exam_round, batch_id, subject_id, semester, exam_date,
-                    session_no, start_time, end_time, room_id, invigilator_id)
-                   VALUES (%s,'external','external',%s,%s,%s,%s,1,%s,%s,%s,%s)""",
+                    session_no, start_time, end_time, room_id, invigilator_id, invigilator2_id)
+                   VALUES (%s,'external','external',%s,%s,%s,%s,1,%s,%s,%s,%s,%s)""",
                 (f"External Exam - {ex['subject']['subject_name']}",
                  ex["batch"]["batch_id"], ex["subject"]["subject_id"], ex["batch"]["semester"],
                  ex["date"], ex["start"].strftime("%H:%M:%S"), ex["end"].strftime("%H:%M:%S"),
-                 ex["room"]["room_id"], tid))
+                 ex["room"]["room_id"], tids[0], tids[1] if len(tids) > 1 else None))
         conn.commit()
         w.close()
 
         duty = {t: 0 for t in teachers}
-        for t in inv_of:
-            duty[t] += 1
+        for ts in inv_of:
+            for t in ts:
+                duty[t] += 1
 
         per_day = {}
         for e in exams:
@@ -844,8 +906,8 @@ def external_template(user: dict = Depends(require_role("admin"))):
     out = io.StringIO()
     wr = csv.writer(out)
     wr.writerow(EXTERNAL_COLUMNS)
-    wr.writerow(["BCA 5 Sem", "BCA125", "2026-12-01", "10:00", "13:00", ""])
-    wr.writerow(["BCA DS 5 Sem", "IDS019", "2026-12-01", "10:00", "13:00", ""])
+    wr.writerow(["BCA 5 Sem", "BCA125", "2026-12-01", "09:00", "12:00", ""])
+    wr.writerow(["BCA DS 5 Sem", "IDS019", "2026-12-01", "14:00", "17:00", ""])
     return StreamingResponse(
         io.BytesIO(out.getvalue().encode("utf-8")),
         media_type="text/csv",
@@ -862,7 +924,7 @@ async def import_external(file: UploadFile = File(...),
     await _notify(
         "External Exam Schedule Published",
         f"External exams: {result['start_date']} to {result['end_date']}. "
-        "Regular classes are suspended in those weeks. Check your exam schedule.")
+        "Regular classes are suspended in this period. Check your exam schedule.")
     return result
 
 
@@ -882,6 +944,161 @@ def week_status(user: dict = Depends(get_current_user)):
         cur.close()
         conn.close()
 
+# ------------------------------------------------------------
+# REMINDERS (student: own batch, teacher: own invigilation duty)
+# ------------------------------------------------------------
+REMINDER_LEAD_DAYS = {"external": 15, "class_test_1": 3, "mid_sem": 3, "class_test_2": 3}
+
+
+@router.get("/reminders")
+def exam_reminders(user: dict = Depends(get_current_user)):
+    role = str(user.get("role", "")).lower()
+    if role not in ("student", "teacher"):
+        return []
+
+    rows = get_schedule(exam_round=None, user=user)
+    today = date.today()
+
+    by_round = {}
+    for r in rows:
+        by_round.setdefault(r["exam_round"], []).append(r)
+
+    out = []
+    for rnd, items in by_round.items():
+        lead = REMINDER_LEAD_DAYS.get(rnd, 3)
+        first = date.fromisoformat(min(i["exam_date"] for i in items))
+        last = date.fromisoformat(max(i["exam_date"] for i in items))
+        if not (first - timedelta(days=lead) <= today <= last):
+            continue
+
+        upcoming = [i for i in items if date.fromisoformat(i["exam_date"]) >= today]
+        if not upcoming:
+            continue
+
+        exams = []
+        for i in upcoming:
+            exams.append({
+                "exam_id": i["exam_id"],
+                "exam_date": i["exam_date"],
+                "start_time": i["start_time"],
+                "end_time": i["end_time"],
+                "subject_name": i["subject_name"],
+                "batch_name": i["batch_name"],
+                "room_name": i["room_name"],
+                "days_left": (date.fromisoformat(i["exam_date"]) - today).days,
+            })
+
+        nxt = exams[0]
+        n = nxt["days_left"]
+        label = ROUND_LABELS.get(rnd, rnd)
+        if n == 0:
+            headline = f"{label}: exam today"
+        elif n == 1:
+            headline = f"{label}: next exam tomorrow"
+        else:
+            headline = f"{label}: next exam in {n} days"
+
+        out.append({
+            "exam_round": rnd,
+            "round_label": label,
+            "kind": "external" if rnd == "external" else "internal",
+            "headline": headline,
+            "days_left": n,
+            "starts_on": first.isoformat(),
+            "ends_on": last.isoformat(),
+            "exams": exams,
+        })
+
+    out.sort(key=lambda x: x["days_left"])
+    return out
+
+def generate_daily_reminders():
+    """Creates today's exam reminders in the notifications table.
+    Safe to run many times a day: the dedupe key allows one per day."""
+    conn = get_db_connection()
+    cur = conn.cursor(dictionary=True)
+    created = 0
+    try:
+        today = date.today()
+        cur.execute(
+            """SELECT e.exam_id, e.exam_round, e.exam_date, e.start_time, e.end_time,
+                      e.batch_id, b.batch_name, s.subject_name, r.room_name,
+                      e.invigilator_id, e.invigilator2_id
+               FROM exam_schedule e
+               JOIN batches b ON e.batch_id = b.batch_id
+               JOIN subjects s ON e.subject_id = s.subject_id
+               JOIN rooms r ON e.room_id = r.room_id
+               ORDER BY e.exam_date, e.start_time""")
+        rows = cur.fetchall()
+        for r in rows:
+            r["date"] = _as_date(r["exam_date"])
+
+        def headline(label, n):
+            if n == 0:
+                return f"{label}: exam today"
+            if n == 1:
+                return f"{label}: next exam tomorrow"
+            return f"{label}: next exam in {n} days"
+
+        def line(r, with_batch):
+            when = "Today" if r["date"] == today else r["date"].strftime("%a %d %b")
+            text = (f"{when}, {_fmt12(_hhmm(r['start_time']))} - {r['subject_name']} "
+                    f"({r['room_name']})")
+            return text + (f" - {r['batch_name']}" if with_batch else "")
+
+        def groups(key_fn):
+            out = {}
+            for r in rows:
+                for k in key_fn(r):
+                    out.setdefault(k, []).append(r)
+            return out
+
+        def push(audience, key, items, label, rnd, batch_id=None, teacher_id=None, with_batch=False):
+            nonlocal created
+            lead = REMINDER_LEAD_DAYS.get(rnd, 3)
+            first, last = items[0]["date"], items[-1]["date"]
+            if not (first - timedelta(days=lead) <= today <= last):
+                return
+            upcoming = [i for i in items if i["date"] >= today]
+            if not upcoming:
+                return
+            n = (upcoming[0]["date"] - today).days
+            shown = upcoming[:3]
+            msg = "\n".join(line(i, with_batch) for i in shown)
+            if len(upcoming) > len(shown):
+                msg += f"\n+{len(upcoming) - len(shown)} more exam(s)"
+            cur.execute(
+                """INSERT IGNORE INTO notifications
+                   (title, message, notif_type, audience, batch_id, teacher_id, dedupe_key)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                (headline(label, n), msg, "warning" if n <= 1 else "info",
+                 audience, batch_id, teacher_id, f"exam:{rnd}:{key}:{today}"))
+            created += cur.rowcount
+
+        # students: one reminder per batch per round
+        for (rnd, bid), items in groups(lambda r: [(r["exam_round"], r["batch_id"])]).items():
+            push("student", f"b{bid}", items, ROUND_LABELS.get(rnd, rnd), rnd, batch_id=bid)
+
+        # teachers: one reminder per invigilator per round
+        def teacher_keys(r):
+            ids = [r["invigilator_id"]] + ([r["invigilator2_id"]] if r["invigilator2_id"] else [])
+            return [(r["exam_round"], t) for t in ids]
+
+        for (rnd, tid), items in groups(teacher_keys).items():
+            push("teacher", f"t{tid}", items, ROUND_LABELS.get(rnd, rnd), rnd,
+                 teacher_id=tid, with_batch=True)
+
+        conn.commit()
+        return created
+    finally:
+        cur.close()
+        conn.close()
+
+
+@router.post("/reminders/run")
+def run_reminders_now(user: dict = Depends(require_role("admin"))):
+    """Admin test button: creates today's reminders right now."""
+    return {"created": generate_daily_reminders()}
 
 @router.get("/schedule")
 def get_schedule(exam_round: Optional[str] = None,
@@ -896,12 +1113,14 @@ def get_schedule(exam_round: Optional[str] = None,
                    e.start_time, e.end_time, e.semester, e.batch_id, b.batch_name,
                    s.subject_id, s.subject_name, s.subject_code,
                    r.room_name, r.room_type,
-                   e.invigilator_id, t.teacher_name AS invigilator_name
+                   e.invigilator_id, t.teacher_name AS invigilator_name,
+                   e.invigilator2_id, t2.teacher_name AS invigilator2_name
             FROM exam_schedule e
             JOIN batches b ON e.batch_id = b.batch_id
             JOIN subjects s ON e.subject_id = s.subject_id
             JOIN rooms r ON e.room_id = r.room_id
             JOIN teachers t ON e.invigilator_id = t.teacher_id
+            LEFT JOIN teachers t2 ON e.invigilator2_id = t2.teacher_id
             WHERE 1 = 1"""
         params = []
         if exam_round in ROUND_LABELS:
@@ -917,8 +1136,8 @@ def get_schedule(exam_round: Optional[str] = None,
             q += " AND e.batch_id = %s"
             params.append(st["batch_id"])
         elif role == "teacher":
-            q += " AND e.invigilator_id = %s"
-            params.append(user.get("teacher_id"))
+            q += " AND (e.invigilator_id = %s OR e.invigilator2_id = %s)"
+            params.extend([user.get("teacher_id"), user.get("teacher_id")])
         elif role != "admin":
             raise HTTPException(403, "Not allowed")
 
@@ -930,6 +1149,11 @@ def get_schedule(exam_round: Optional[str] = None,
             r["start_time"] = _hhmm(r["start_time"])
             r["end_time"] = _hhmm(r["end_time"])
             r["round_label"] = ROUND_LABELS.get(r["exam_round"], r["exam_round"])
+            names = [r["invigilator_name"]]
+            if r["invigilator2_name"]:
+                names.append(r["invigilator2_name"])
+            r["invigilator_names"] = names
+            r["invigilator_text"] = ", ".join(names)
         return rows
     finally:
         cur.close()
@@ -944,9 +1168,11 @@ def duty_summary(exam_round: str, user: dict = Depends(require_role("admin"))):
         cur.execute(
             """SELECT t.teacher_id, t.teacher_name,
                       (SELECT COUNT(*) FROM exam_schedule e
-                        WHERE e.invigilator_id = t.teacher_id AND e.exam_round = %s) AS duties,
+                        WHERE (e.invigilator_id = t.teacher_id OR e.invigilator2_id = t.teacher_id)
+                          AND e.exam_round = %s) AS duties,
                       (SELECT COUNT(*) FROM exam_schedule e
-                        WHERE e.invigilator_id = t.teacher_id) AS total_duties
+                        WHERE e.invigilator_id = t.teacher_id
+                           OR e.invigilator2_id = t.teacher_id) AS total_duties
                FROM teachers t
                ORDER BY duties DESC, t.teacher_name""", (exam_round,))
         return cur.fetchall()
@@ -974,18 +1200,29 @@ def check_conflicts(exam_round: Optional[str] = None,
 @router.put("/{exam_id}/invigilator")
 def change_invigilator(exam_id: int, body: InvigilatorIn,
                        user: dict = Depends(require_role("admin"))):
+    if body.slot not in (1, 2):
+        raise HTTPException(400, "slot must be 1 or 2")
+    col = "invigilator_id" if body.slot == 1 else "invigilator2_id"
     conn = get_db_connection()
     cur = conn.cursor(dictionary=True)
     try:
-        cur.execute("SELECT exam_date FROM exam_schedule WHERE exam_id = %s", (exam_id,))
+        cur.execute(
+            "SELECT exam_date, invigilator_id, invigilator2_id FROM exam_schedule WHERE exam_id = %s",
+            (exam_id,))
         ex = cur.fetchone()
         if not ex:
             raise HTTPException(404, "Exam not found")
+        if body.slot == 2 and not ex["invigilator2_id"]:
+            raise HTTPException(400, "This exam has only one invigilator.")
 
         cur.execute("SELECT teacher_name FROM teachers WHERE teacher_id = %s", (body.teacher_id,))
         t = cur.fetchone()
         if not t:
             raise HTTPException(404, "Teacher not found")
+
+        other = ex["invigilator2_id"] if body.slot == 1 else ex["invigilator_id"]
+        if other == body.teacher_id:
+            raise HTTPException(400, f"{t['teacher_name']} is already the other invigilator of this exam.")
 
         cur.execute("SELECT 1 FROM teacher_absences WHERE teacher_id = %s AND absence_date = %s",
                     (body.teacher_id, ex["exam_date"]))
@@ -995,15 +1232,16 @@ def change_invigilator(exam_id: int, body: InvigilatorIn,
         cur.execute(
             """SELECT 1 FROM exam_schedule o
                JOIN exam_schedule e ON e.exam_id = %s
-               WHERE o.invigilator_id = %s AND o.exam_date = e.exam_date
+               WHERE (o.invigilator_id = %s OR o.invigilator2_id = %s)
+                 AND o.exam_date = e.exam_date
                  AND o.exam_id <> e.exam_id
                  AND o.start_time < e.end_time AND o.end_time > e.start_time
-               LIMIT 1""", (exam_id, body.teacher_id))
+               LIMIT 1""", (exam_id, body.teacher_id, body.teacher_id))
         if cur.fetchone():
             raise HTTPException(400, f"{t['teacher_name']} already has duty at that time.")
 
         w = conn.cursor()
-        w.execute("UPDATE exam_schedule SET invigilator_id = %s WHERE exam_id = %s",
+        w.execute(f"UPDATE exam_schedule SET {col} = %s WHERE exam_id = %s",
                   (body.teacher_id, exam_id))
         conn.commit()
         w.close()
@@ -1054,6 +1292,17 @@ def _time_range(r):
 
 def _room_text(r):
     return f"{r['room_name']} ({r['room_type']})" if r.get("room_type") else r["room_name"]
+
+
+def _expand_duty(rows):
+    """One row per invigilator (an exam with 2 invigilators gives 2 rows)."""
+    out = []
+    for r in rows:
+        for n in r["invigilator_names"]:
+            c = dict(r)
+            c["invigilator_name"] = n
+            out.append(c)
+    return out
 
 
 def _build_xlsx(rows, label):
@@ -1117,10 +1366,10 @@ def _build_xlsx(rows, label):
     ws1 = wb.active
     ws1.title = "Timetable"
     sheet(ws1,
-          ["Date", "Time", "Batch", "Code", "Subject", "Room / Lab", "Invigilator"],
+          ["Date", "Time", "Batch", "Code", "Subject", "Room / Lab", "Invigilator(s)"],
           [[_pretty(r["exam_date"]), _time_range(r), r["batch_name"], r["subject_code"],
-            r["subject_name"], _room_text(r), r["invigilator_name"]] for r in rows],
-          [18, 20, 16, 12, 38, 22, 24])
+            r["subject_name"], _room_text(r), r["invigilator_text"]] for r in rows],
+          [18, 20, 16, 12, 38, 22, 30])
 
     ws2 = wb.create_sheet("Batch-wise")
     grid = []
@@ -1134,10 +1383,11 @@ def _build_xlsx(rows, label):
     sheet(ws2, ["Batch"] + [_short(d) for d in dates], grid, [16] + [26] * len(dates))
 
     ws3 = wb.create_sheet("Invigilators")
+    expanded = _expand_duty(rows)
     totals = {}
-    for r in rows:
+    for r in expanded:
         totals[r["invigilator_name"]] = totals.get(r["invigilator_name"], 0) + 1
-    duty = sorted(rows, key=lambda r: (r["invigilator_name"], r["exam_date"], r["start_time"]))
+    duty = sorted(expanded, key=lambda r: (r["invigilator_name"], r["exam_date"], r["start_time"]))
     sheet(ws3,
           ["Invigilator", "Total duties", "Date", "Time", "Batch", "Room / Lab"],
           [[r["invigilator_name"], totals[r["invigilator_name"]], _pretty(r["exam_date"]),
@@ -1198,11 +1448,11 @@ def _build_pdf(rows, label):
     story = header()
     story.append(Paragraph("Date-wise timetable", sec))
     story.append(table(
-        [["Date", "Time", "Batch", "Subject", "Room / Lab", "Invigilator"]] +
+        [["Date", "Time", "Batch", "Subject", "Room / Lab", "Invigilator(s)"]] +
         [[_pretty(r["exam_date"]), _time_range(r), r["batch_name"],
-          f"{r['subject_name']} ({r['subject_code']})", _room_text(r), r["invigilator_name"]]
+          f"{r['subject_name']} ({r['subject_code']})", _room_text(r), r["invigilator_text"]]
          for r in rows],
-        [95, 105, 85, 215, 120, 174]))
+        [95, 105, 85, 205, 120, 184]))
 
     story.append(PageBreak())
     story += header()
@@ -1222,7 +1472,7 @@ def _build_pdf(rows, label):
     story += header()
     story.append(Paragraph("Invigilation duty chart", sec))
     by_t = {}
-    for r in rows:
+    for r in _expand_duty(rows):
         by_t.setdefault(r["invigilator_name"], []).append(r)
     duty = [["Invigilator", "Duties", "Duty details"]]
     for name in sorted(by_t):

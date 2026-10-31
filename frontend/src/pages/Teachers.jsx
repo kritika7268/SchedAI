@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import api from "../services/api";
 
 function Teachers() {
   const [teachers, setTeachers] = useState([]);
@@ -12,7 +13,7 @@ function Teachers() {
   const [editingId, setEditingId] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const API_URL = "http://127.0.0.1:8000";
+
 
   // =========================
   // FETCH TEACHERS
@@ -21,7 +22,7 @@ function Teachers() {
     try {
       setLoading(true);
 
-      const response = await fetch(`${API_URL}/teachers`);
+      const response = await api.get('/teachers');
 
       if (!response.ok) {
         throw new Error("Failed to fetch teachers");
@@ -41,7 +42,7 @@ function Teachers() {
   // =========================
   const fetchDepartments = async () => {
     try {
-      const response = await fetch(`${API_URL}/departments`);
+      const response = await api.get('/departments');
 
       if (!response.ok) {
         throw new Error("Failed to fetch departments");

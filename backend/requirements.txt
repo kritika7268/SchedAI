@@ -21,3 +21,5 @@ ortools
 uvicorn[standard]
 python-dotenv
 mysql-connector-python
+google-genai 
+tzdata

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 
 const API_URL = "http://127.0.0.1:8000";
 const WS_URL = "ws://127.0.0.1:8000";
@@ -14,13 +15,15 @@ const COLORS = {
 /**
  * <NotificationBell role="admin" />   role: "admin" | "teacher" | "student"
  *
- * Connects to the backend WebSocket for live push notifications, and
- * loads recent history on mount. Unread count persists across page
- * reloads via localStorage (per role).
- *
- * Auto-reconnects every 3s if the socket drops (e.g. backend restart).
+ * Loads recent history (with the login token, so students only get their own
+ * batch's reminders and teachers only their own duty), listens to the
+ * WebSocket for live pushes, and refreshes the list every 5 minutes so the
+ * daily exam reminders show up without a page reload.
  */
 function NotificationBell({ role }) {
+  const { user } = useAuth();
+  const token = user?.access_token;
+
   const [notifications, setNotifications] = useState([]);
   const [open, setOpen] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -29,20 +32,25 @@ function NotificationBell({ role }) {
 
   const lastSeenKey = `schedai_last_seen_notification_${role}`;
 
-  // ── load history on mount ───────────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`${API_URL}/notifications?role=${role}`);
-        if (res.ok) {
-          const data = await res.json();
-          setNotifications(data);
-        }
-      } catch (e) {
-        console.error("Could not load notification history:", e);
+  // ── load history (with token) ───────────────────────────────────────────
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/notifications?role=${role}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        setNotifications(await res.json());
       }
-    })();
-  }, [role]);
+    } catch (e) {
+      console.error("Could not load notification history:", e);
+    }
+  }, [role, token]);
+
+  useEffect(() => {
+    loadHistory();
+    const timer = setInterval(loadHistory, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [loadHistory]);
 
   // ── WebSocket with auto-reconnect ───────────────────────────────────────
   useEffect(() => {
@@ -109,6 +117,7 @@ function NotificationBell({ role }) {
   const handleToggle = () => {
     const next = !open;
     setOpen(next);
+    if (next) loadHistory();
     if (next && notifications.length > 0) {
       const maxId = Math.max(...notifications.map((n) => n.notification_id));
       localStorage.setItem(lastSeenKey, String(maxId));
@@ -116,6 +125,7 @@ function NotificationBell({ role }) {
   };
 
   const timeAgo = (isoLike) => {
+    if (!isoLike) return "";
     const then = new Date(isoLike.replace(" ", "T"));
     const diffMin = Math.floor((Date.now() - then.getTime()) / 60000);
     if (diffMin < 1) return "just now";
@@ -201,7 +211,7 @@ function NotificationBell({ role }) {
                     <div style={{ fontWeight: 600, fontSize: 13, color: "#111827" }}>
                       {n.title}
                     </div>
-                    <div style={{ fontSize: 12, color: "#4b5563", marginTop: 2 }}>
+                    <div style={{ fontSize: 12, color: "#4b5563", marginTop: 2, whiteSpace: "pre-line" }}>
                       {n.message}
                     </div>
                     <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
