@@ -14,8 +14,10 @@ import re
 import time
 
 # a blocked network must not make the chat wait forever
-CALL_TIMEOUT_SECONDS = 20          # one request
-DEADLINE_SECONDS = float(os.getenv("LLM_DEADLINE_SECONDS", "25"))   # all models together
+# NOTE: the Gemini SDK also sends this timeout to Google as a server deadline, so too small a value
+# makes Google answer "504 DEADLINE_EXCEEDED" for slow ("thinking") models.
+CALL_TIMEOUT_SECONDS = int(os.getenv("LLM_CALL_TIMEOUT", "40"))          # one request
+DEADLINE_SECONDS = float(os.getenv("LLM_DEADLINE_SECONDS", "30"))        # stop trying more models after this
 
 # Google retires models from time to time. Newest first; the first one that works is remembered.
 GEMINI_MODELS = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
@@ -28,7 +30,24 @@ def _looks_like_auth_error(msg: str) -> bool:
                                   "unauthenticated", "invalid api key", "incorrect api key"))
 
 
+def _thinking_variants(types, model):
+    """Configs to try for a model, fastest first. Hidden 'thinking' makes new models slow."""
+    out = []
+    try:
+        if "2.5" in model and "pro" not in model:
+            out.append(types.ThinkingConfig(thinking_budget=0))
+        elif model.startswith("gemini-3") or "latest" in model:
+            level = getattr(types, "ThinkingLevel", None)
+            out.append(types.ThinkingConfig(
+                thinking_level=level.LOW if level is not None and hasattr(level, "LOW") else "LOW"))
+    except Exception:
+        pass
+    out.append(None)                                    # plain config as the last resort
+    return out
+
+
 def _gemini(system, history, message):
+    global _WORKING_MODEL
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("GEMINI_API_KEY is missing. Add it to backend/.env and restart the backend.")
@@ -48,7 +67,6 @@ def _gemini(system, history, message):
     ]
     contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
 
-    global _WORKING_MODEL
     first = os.getenv("GEMINI_MODEL")
     queue = [m for m in [_WORKING_MODEL, first] + GEMINI_MODELS if m]
     tried, errors = set(), []
@@ -58,29 +76,39 @@ def _gemini(system, history, message):
             continue
         tried.add(model)
         if errors and time.time() - started > DEADLINE_SECONDS:
-            errors.append("stopped: taking too long (is the internet / firewall / VPN blocking Google?)")
+            errors.append("stopped: taking too long")
             break
-        try:
-            cfg = dict(system_instruction=system, temperature=0.2, max_output_tokens=3000)
-            # 2.5 "flash" models spend output tokens on hidden thinking -> turn it off so replies are not empty
-            if "2.5" in model and "pro" not in model:
-                cfg["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-            r = client.models.generate_content(
-                model=model, contents=contents, config=types.GenerateContentConfig(**cfg))
-            text = (r.text or "").strip()
-            if text:
-                _WORKING_MODEL = model
-                return text
-            errors.append(f"{model}: empty reply")
-        except Exception as e:
-            msg = str(e).replace(key, "***")
-            errors.append(f"{model}: {msg[:300]}")
-            if _looks_like_auth_error(msg):
-                break                                  # another model will not fix a bad key
-            # Google's error text names the replacement model: "... update your code to use models/XYZ"
-            m = re.search(r"use models/([A-Za-z0-9._\-]+)", msg)
-            if m and m.group(1) not in tried:
-                queue.insert(0, m.group(1))
+        stop = False
+        for variant in _thinking_variants(types, model):
+            try:
+                cfg = dict(system_instruction=system, temperature=0.2, max_output_tokens=3000)
+                if variant is not None:
+                    cfg["thinking_config"] = variant
+                r = client.models.generate_content(
+                    model=model, contents=contents, config=types.GenerateContentConfig(**cfg))
+                text = (r.text or "").strip()
+                if text:
+                    _WORKING_MODEL = model
+                    return text
+                errors.append(f"{model}: empty reply")
+                break
+            except Exception as e:
+                msg = str(e).replace(key, "***")
+                if _looks_like_auth_error(msg):
+                    errors.append(f"{model}: {msg[:300]}")
+                    stop = True                         # another model will not fix a bad key
+                    break
+                low = msg.lower()
+                if variant is not None and ("thinking" in low or "invalid_argument" in low):
+                    continue                            # this model rejects that option -> try plain config
+                errors.append(f"{model}: {msg[:300]}")
+                # Google's error text names the replacement model: "... update your code to use models/XYZ"
+                m = re.search(r"use models/([A-Za-z0-9._\-]+)", msg)
+                if m and m.group(1) not in tried:
+                    queue.insert(0, m.group(1))
+                break
+        if stop:
+            break
     raise RuntimeError(" | ".join(errors))
 
 
