@@ -1,52 +1,67 @@
-export const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+import axios from "axios";
 
-export const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+export const API_BASE =
+  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-import axios from 'axios';
+const AUTH_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"];
 
-// Helper to extract token from the stored auth_user object
-function getAuthToken() {
-
-// Helper to extract token from the stored auth_user object
-function getAuthToken() {
-
-// Helper to extract token from the stored auth_user object
-function getAuthToken() {
-  const stored = localStorage.getItem('auth_user');
-  if (!stored) return null;
+function readStoredUser() {
   try {
-    const parsed = JSON.parse(stored);
-    return parsed.access_token || null;
+    return JSON.parse(localStorage.getItem("auth_user") || "null");
   } catch {
     return null;
   }
 }
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000',
-  withCredentials: true,
-});
+function loginPathFor(role) {
+  if (role === "admin") return "/admin/login";
+  if (role === "teacher") return "/teacher/login";
+  if (role === "student") return "/student/login";
+  return "/";
+}
 
-// Request interceptor: attach Authorization header if token exists
+function handleUnauthorized(url) {
+  const path = String(url || "").replace(API_BASE, "");
+  if (AUTH_PATHS.some((p) => path.startsWith(p))) return;
+  const role = readStoredUser()?.role;
+  localStorage.removeItem("auth_user");
+  window.location.href = loginPathFor(role);
+}
+
+const api = axios.create({ baseURL: API_BASE });
+
 api.interceptors.request.use((config) => {
-  const token = getAuthToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  const token = readStoredUser()?.access_token;
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
-// Response interceptor: handle 401 globally (optional – UI will also catch)
 api.interceptors.response.use(
-  (response) => response,
+  (res) => res,
   (error) => {
-    if (error.response?.status === 401) {
-      // clear auth and redirect to login page
-      localStorage.removeItem('auth_user');
-      window.location.href = '/login';
-    }
+    if (error.response?.status === 401) handleUnauthorized(error.config?.url);
     return Promise.reject(error);
   }
 );
+
+export function installAuthFetch() {
+  if (window.__authFetchInstalled) return;
+  window.__authFetchInstalled = true;
+  const originalFetch = window.fetch.bind(window);
+
+  window.fetch = async (input, init = {}) => {
+    const url = typeof input === "string" ? input : input?.url || "";
+    if (!url.startsWith(API_BASE)) return originalFetch(input, init);
+
+    const headers = new Headers(init.headers || {});
+    const token = readStoredUser()?.access_token;
+    if (token && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+    const res = await originalFetch(input, { ...init, headers });
+    if (res.status === 401) handleUnauthorized(url);
+    return res;
+  };
+}
 
 export default api;

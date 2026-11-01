@@ -5,6 +5,7 @@ Checks WHY the AI assistant is not answering.  Works from backend\\ or backend\\
     python test_llm.py
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -41,6 +42,19 @@ print("Model    :", os.getenv("OPENAI_MODEL" if provider == "openai" else "GEMIN
 if provider == "gemini" and key and len(key) != 39:
     print(f"Note     : Gemini keys are usually 39 characters (start with AIza); yours has {len(key)}.")
     print("           If the test says 'API key not valid', copy the key again - only the key, no extra text.")
+if "--models" in sys.argv:                      # python test_llm.py --models
+    print("\nModels your key can use:\n")
+    try:
+        from google import genai
+        for m in genai.Client(api_key=key).models.list():
+            acts = getattr(m, "supported_actions", None) or []
+            if not acts or "generateContent" in acts:
+                print("  ", str(m.name).replace("models/", ""))
+        print("\nPut one of the 'flash' names in backend\\.env as  GEMINI_MODEL=<name>")
+    except Exception as e:
+        print("Could not list models:", e)
+    sys.exit(0)
+
 print("\nCalling the AI (wait up to ~30 seconds) ...\n")
 
 try:
@@ -61,8 +75,14 @@ except Exception as e:
         print("FIX: the key is wrong or disabled. Create a new key in Google AI Studio and paste it again.")
     elif "429" in low or "quota" in low or "resource_exhausted" in low:
         print("FIX: free quota is used up. Wait a few minutes, or use another key.")
-    elif "404" in low or "not found" in low:
-        print("FIX: that model is not available to your key. Add to backend\\.env:  GEMINI_MODEL=gemini-2.0-flash")
+    elif "404" in low or "not found" in low or "no longer available" in low:
+        hint = re.search(r"use models/([A-Za-z0-9._\-]+)", msg)
+        if hint:
+            print("FIX: Google retired the old model and recommends a new one. Add this line to backend\\.env:")
+            print(f"     GEMINI_MODEL={hint.group(1)}")
+        else:
+            print("FIX: that model is not available to your key. Run:  python test_llm.py --models")
+            print("     then add one of the 'flash' names to backend\\.env as  GEMINI_MODEL=<name>")
     elif any(w in low for w in ("timed out", "timeout", "taking too long", "connecterror", "getaddrinfo",
                                 "name resolution", "ssl", "proxy", "connection")):
         print("FIX: Python cannot reach Google. Turn OFF any VPN, check the internet / firewall / antivirus,")
