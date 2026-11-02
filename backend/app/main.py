@@ -29,13 +29,15 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from app.auth import SECRET_KEY, ALGORITHM
 from app.exams import generate_daily_reminders
+from fastapi import Depends
+from app.security import api_gate
 
 from email.message import EmailMessage
 
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
-app = FastAPI(title="SchedAI API")
+app = FastAPI(title="SchedAI API", dependencies=[Depends(api_gate)])
 from app.imports import router as import_router
 from app.syllabus import router as syllabus_router, overall_progress
 app.include_router(import_router)
@@ -223,13 +225,16 @@ def health():
 
 
 @app.websocket("/ws/notifications")
-async def websocket_notifications(websocket: WebSocket, role: str = "all"):
-    await manager.connect(websocket, role)
-
+async def websocket_notifications(websocket: WebSocket, token: str = ""):
+    try:
+        user = get_current_user(token)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    await manager.connect(websocket, user["role"])
     try:
         while True:
             await websocket.receive_text()
-
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
@@ -4531,8 +4536,9 @@ def signup(payload: SignupRequest):
         raise HTTPException(status_code=400, detail="Name is required")
     if not validate_email_format(email):
         raise HTTPException(status_code=400, detail="Enter a valid email address")
-    if len(payload.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    pw = payload.password
+    if len(pw) < 8 or not any(c.isalpha() for c in pw) or not any(c.isdigit() for c in pw):
+        raise HTTPException(status_code=400, detail="Password must be 8+ characters with letters and numbers")
 
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
@@ -4548,7 +4554,9 @@ def signup(payload: SignupRequest):
         # ---------------- ADMIN ----------------
         if payload.role == "admin":
             required_code = os.getenv("ADMIN_SIGNUP_CODE", "")
-            if required_code and (payload.admin_code or "") != required_code:
+            if not required_code:
+                raise HTTPException(status_code=403, detail="Admin signup is disabled.")
+            if not hmac.compare_digest((payload.admin_code or "").encode(), required_code.encode()):
                 raise HTTPException(status_code=403, detail="Invalid admin access code")
 
             cursor.execute("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")
@@ -4556,7 +4564,6 @@ def signup(payload: SignupRequest):
                 raise HTTPException(
                     status_code=403,
                     detail=f"Admin signup is closed. Only {MAX_ADMIN_ACCOUNTS} admin accounts are allowed.")
-
         # ---------------- TEACHER ----------------
         elif payload.role == "teacher":
             if not payload.teacher_id:

@@ -59,7 +59,7 @@ function NotificationBell({ role }) {
     let closedByUs = false;
 
     const connect = () => {
-      ws = new WebSocket(`${WS_URL}/ws/notifications?role=${role}`);
+      ws = new WebSocket(`${WS_URL}/ws/notifications?token=${encodeURIComponent(token || "")}`);
       wsRef.current = ws;
 
       ws.onopen = () => setConnected(true);
@@ -96,7 +96,7 @@ function NotificationBell({ role }) {
       clearTimeout(retryTimer);
       if (ws) ws.close();
     };
-  }, [role]);
+  }, [role, token]);
 
   // ── close dropdown on outside click ─────────────────────────────────────
   useEffect(() => {

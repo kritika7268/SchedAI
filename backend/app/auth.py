@@ -5,6 +5,9 @@ Password hashing + JWT auth + role-based access control.
 Uses the same raw mysql.connector style as the rest of your backend.
 """
 
+import hashlib
+import os
+import secrets
 from datetime import datetime, timedelta
 
 from fastapi import Depends, HTTPException, status
@@ -14,14 +17,12 @@ from passlib.context import CryptContext
 
 from app.database import get_db_connection
 
-# IMPORTANT: change this to a long random string before you deploy anywhere
-# public. For a college project running on localhost this is fine as-is.
-import os
-import secrets
-import hashlib
+# JWT secret: must be set in backend/.env (JWT_SECRET_KEY) or in Render secrets.
+# The app refuses to start with a missing, short or placeholder key.
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+if len(SECRET_KEY) < 32 or SECRET_KEY.startswith("change-this"):
+    raise RuntimeError("Set a real JWT_SECRET_KEY (32+ chars) in backend/.env")
 
-# JWT secret – read from environment (must be set in Render secrets)
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-this-to-a-long-random-string")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # tokens stay valid for 1 day
 RESET_TOKEN_EXPIRE_MINUTES = 15  # password reset link valid for 15 minutes
@@ -43,6 +44,7 @@ def create_access_token(data: dict) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
 
 def _hash_reset_token(token: str) -> str:
     """Convert the raw reset token into a SHA-256 hash for DB storage."""
@@ -168,6 +170,13 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
     if user is None:
         raise credentials_exception
+
+    # a disabled account must not keep working with an old token
+    if user.get("is_active") in (0, False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been disabled",
+        )
 
     return user
 
