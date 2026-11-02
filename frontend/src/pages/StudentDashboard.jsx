@@ -7,6 +7,8 @@ import NotificationBell from "./NotificationBell";
 import MyGuideCard from "./MyGuideCard";
 import MyExams from "./MyExams";
 import { useExamWeek, ExamWeekBanner } from "./ExamWeek";
+import useTodayHoliday from "./useTodayHoliday";
+import ExamReminders from "./ExamReminders";
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -163,7 +165,8 @@ export default function StudentDashboard() {
   const studentId = user?.student_id;
   const token = user?.access_token;
   const examWeek = useExamWeek();
-  const classesSuspended = !!examWeek?.active;
+  const holidayToday = useTodayHoliday();
+  const classesSuspended = !!examWeek?.active || !!holidayToday;
 
   const [student,       setStudent]       = useState(null);
   const [batch,         setBatch]         = useState(null);
@@ -387,6 +390,7 @@ export default function StudentDashboard() {
         {/* HOLIDAY NOTIFICATIONS */}
         <HolidayBanner />
         <ExamWeekBanner week={examWeek} />
+                <ExamReminders />
 
         {/* BATCH PILL */}
         {batch ? (
@@ -449,7 +453,13 @@ export default function StudentDashboard() {
           {todaysMerged.length === 0 ? (
             <div style={S.empty}>
               <div style={S.emptyIco}>☀️</div>
-              <p style={{ margin:0, fontSize:14 }}>No classes scheduled today.</p>
+                <p style={{ margin:0, fontSize:14 }}>
+                {holidayToday
+                  ? `Holiday today: ${holidayToday.holiday_name}. No classes.`
+                  : examWeek?.active
+                  ? "Exam week: regular classes are suspended."
+                  : "No classes scheduled today."}
+              </p>
             </div>
           ) : (
             todaysMerged.map(t => (

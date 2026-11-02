@@ -156,20 +156,6 @@ function Landing() {
   );
 }
 
-// =========================
-// DASHBOARD CARD
-// =========================
-function DashboardCard({ to, title, description }) {
-  return (
-    <Link to={to} className="dashboard-card-link">
-      <div className="dashboard-card">
-        <h2>{title}</h2>
-        <p>{description}</p>
-        <span className="card-arrow">→</span>
-      </div>
-    </Link>
-  );
-}
 
 // =========================
 // LIVE STAT CARD (Admin Dashboard)
@@ -474,25 +460,6 @@ function Dashboard() {
           )}
         </div>
       )}
-
-      {/* ── EXISTING NAVIGATION GRID ── */}
-      <div className="dashboard-grid">
-        <DashboardCard to="/admin/departments" title="Departments" description="Manage department information." />
-        <DashboardCard to="/admin/teachers" title="Teachers" description="Manage teacher records." />
-        <DashboardCard to="/admin/subjects" title="Subjects" description="Manage department subjects." />
-        <DashboardCard to="/admin/rooms" title="Rooms" description="Manage classrooms and rooms." />
-        <DashboardCard to="/admin/students" title="Students" description="Manage student records." />
-        <DashboardCard to="/admin/batches" title="Batches" description="Manage batches/sections." />
-        <DashboardCard to="/admin/timetable-link" title="Timetable" description="Generate and manage the AI timetable." />
-        <DashboardCard to="/admin/teacher-absences" title="Teacher Absences" description="Manage teacher absence records." />
-        <DashboardCard to="/admin/substitutions" title="Substitutions" description="Manage teacher substitutions." />
-        <DashboardCard to="/admin/syllabus-progress" title="Syllabus Progress" description="Track subject syllabus progress." />
-        <DashboardCard to="/admin/project-guides" title="Project Guides" description="Manage final year project guides." />
-        <DashboardCard to="/admin/holidays" title="Holiday Calendar" description="Manage department holidays." />
-        <DashboardCard to="/admin/notes" title="Notes" description="Manage semester Notes." />
-        <DashboardCard to="/admin/pyqs" title="Previous Year Questions" description="Manage previous year question papers." />
-        <DashboardCard to="/admin/import" title="Import Data" description="Import data from CSV files." />
-      </div>
     </div>
   );
 }
