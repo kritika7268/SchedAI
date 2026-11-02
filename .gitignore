@@ -12,21 +12,25 @@ __pycache__/
 
 # Virtual environment
 venv/
-.env
-.env.*
 
-# Node / npm
+# Secrets (real keys: never commit)
+.env
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# Uploaded files (keep folders only)
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/app/uploads/*
+!backend/app/uploads/.gitkeep
+
+# Node / build output
 node_modules/
 npm-debug.log
 yarn-error.log
-
-# Vite / build output
 frontend/dist/
 
-# OS generated files
+# Editors / OS
 .idea/
 .vscode/
-
-# Secrets / configuration
-backend/.env
-backend/.env.example
