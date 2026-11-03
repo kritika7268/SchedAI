@@ -332,6 +332,8 @@ function SyllabusRingCard({ fallbackPercent }) {
   );
 }
 
+
+
 // =========================
 // ADMIN DASHBOARD (home page inside /admin)
 // =========================
@@ -437,6 +439,11 @@ function Dashboard() {
 
           {/* Row 5: exam timetable + invigilators */}
           <ExamOverviewCard />
+
+          {/* Timetable: weekly grid, daily, table, download */}
+          <div style={{ marginBottom: 14, marginLeft: -32, marginRight: -32 }}>
+            <Timetable viewOnly />
+          </div>
 
           {/* Today's substitution detail, if any */}
           {stats.today.substitutions.length > 0 && (
