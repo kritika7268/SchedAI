@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter, Routes, Route, Link, Outlet } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, NavLink, Outlet } from "react-router-dom";
 import "./App.css";
 
 import Departments from "./pages/Departments";
@@ -479,21 +479,6 @@ function AdminLayout() {
 
   return (
     <div className="app">
-      {/* Make the admin sidebar scrollable when the menu is taller than the screen */}
-      <style>{`
-        .sidebar {
-          max-height: 100vh;
-          overflow-y: auto !important;
-          overscroll-behavior: contain;
-        }
-        .sidebar .sidebar-nav {
-          overflow: visible !important;
-          padding-bottom: 24px;
-        }
-        .sidebar::-webkit-scrollbar { width: 6px; }
-        .sidebar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-      `}</style>
-
       <aside className="sidebar">
         <div className="sidebar-header">
           <h2>SchedAI</h2>
@@ -501,66 +486,33 @@ function AdminLayout() {
         </div>
 
         <nav className="sidebar-nav">
-          <Link to="/admin/dashboard"><span>🏠</span>Dashboard</Link>
-          <Link to="/admin/profile"><span>👤</span>Profile</Link>
-          <Link to="/admin/departments"><span>🏢</span>Departments</Link>
-          <Link to="/admin/teachers"><span>👨‍🏫</span>Teachers</Link>
-          <Link to="/admin/subjects"><span>📚</span>Subjects</Link>
-          <Link to="/admin/rooms"><span>🏫</span>Rooms</Link>
-          <Link to="/admin/students"><span>🎓</span>Students</Link>
-          <Link to="/admin/batches"><span>👥</span>Batches</Link>
-          <Link to="/admin/timetable-link"><span>🗓️</span>Timetable</Link>
-          <Link to="/admin/teacher-absences"><span>📅</span>Teacher Absences</Link>
-          <Link to="/admin/substitutions"><span>🔄</span>Substitutions</Link>
-          <Link to="/admin/syllabus-progress"><span>📊</span>Syllabus Progress</Link>
-          <Link to="/admin/project-guides"><span>👨‍💼</span>Project Guides</Link>
-          <Link to="/admin/holidays"><span>🎉</span>Holiday Calendar</Link>
-          <Link to="/admin/events"><span>📢</span>Events</Link>
-          <Link to="/admin/notes"><span>📚</span>Notes</Link>
-          <Link to="/admin/pyqs"><span>📝</span>PYQs</Link>
-          <Link to="/admin/import"><span>📥</span>Import Data</Link>
-          <Link to="/admin/exams"><span>🗒️</span>Exam Timetable</Link>
+          <NavLink to="/admin/dashboard"><span>🏠</span>Dashboard</NavLink>
+          <NavLink to="/admin/profile"><span>👤</span>Profile</NavLink>
+          <NavLink to="/admin/departments"><span>🏢</span>Departments</NavLink>
+          <NavLink to="/admin/teachers"><span>👨‍🏫</span>Teachers</NavLink>
+          <NavLink to="/admin/subjects"><span>📚</span>Subjects</NavLink>
+          <NavLink to="/admin/rooms"><span>🏫</span>Rooms</NavLink>
+          <NavLink to="/admin/students"><span>🎓</span>Students</NavLink>
+          <NavLink to="/admin/batches"><span>👥</span>Batches</NavLink>
+          <NavLink to="/admin/timetable-link"><span>🗓️</span>Timetable</NavLink>
+          <NavLink to="/admin/teacher-absences"><span>📅</span>Teacher Absences</NavLink>
+          <NavLink to="/admin/substitutions"><span>🔄</span>Substitutions</NavLink>
+          <NavLink to="/admin/syllabus-progress"><span>📊</span>Syllabus Progress</NavLink>
+          <NavLink to="/admin/project-guides"><span>👨‍💼</span>Project Guides</NavLink>
+          <NavLink to="/admin/holidays"><span>🎉</span>Holiday Calendar</NavLink>
+          <NavLink to="/admin/events"><span>📢</span>Events</NavLink>
+          <NavLink to="/admin/notes"><span>📚</span>Notes</NavLink>
+          <NavLink to="/admin/pyqs"><span>📝</span>PYQs</NavLink>
+          <NavLink to="/admin/import"><span>📥</span>Import Data</NavLink>
+          <NavLink to="/admin/exams"><span>🗒️</span>Exam Timetable</NavLink>
         </nav>
       </aside>
 
       <main className="main-content">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            alignItems: "center",
-            gap: 14,
-            padding: "12px 20px",
-            borderBottom: "1px solid #e5e7eb",
-            background: "#fff",
-          }}
-        >
+        <div className="topbar-bar">
           <NotificationBell role="admin" />
-          <Link
-            to="/admin/profile"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              textDecoration: "none",
-              color: "#111827",
-              fontSize: 14,
-              fontWeight: 600,
-            }}
-          >
-            <span
-              style={{
-                width: 30,
-                height: 30,
-                borderRadius: "50%",
-                background: "#1e293b",
-                color: "#fff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 13,
-              }}
-            >
+          <Link to="/admin/profile" className="topbar-user">
+            <span className="topbar-avatar">
               {(user?.name || "?").charAt(0).toUpperCase()}
             </span>
             {user?.name}
