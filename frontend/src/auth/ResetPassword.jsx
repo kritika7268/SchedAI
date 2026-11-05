@@ -1,25 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-
-const inputStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "11px 12px",
-  border: "1px solid #d1d5db",
-  borderRadius: "8px",
-  fontSize: "14px",
-  outline: "none",
-};
-
-const labelStyle = {
-  display: "block",
-  marginBottom: "7px",
-  fontSize: "14px",
-  fontWeight: 600,
-  color: "#374151",
-};
+import AuthShell from "./AuthShell";
+import { API_BASE as API_URL } from "../services/api";
 
 export default function ResetPassword() {
   const { role: routeRole } = useParams();
@@ -29,7 +11,6 @@ export default function ResetPassword() {
   const rawRole = routeRole || window.location.pathname.split("/")[1];
   const role = ["admin", "teacher", "student"].includes(rawRole) ? rawRole : "student";
   const roleName = role.charAt(0).toUpperCase() + role.slice(1);
-
   const loginPath = `/${role}/login`;
   const forgotPath = `/${role}/forgot-password`;
 
@@ -50,39 +31,25 @@ export default function ResetPassword() {
 
     const trimmedEmail = email.trim().toLowerCase();
 
-    if (!trimmedEmail || !otp || !password || !confirmPassword) {
-      setError("Please fill in all fields.");
-      return;
-    }
-    if (!/^\d{6}$/.test(otp)) {
-      setError("Please enter a valid 6-digit OTP.");
-      return;
-    }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
+    if (!trimmedEmail || !otp || !password || !confirmPassword)
+      return setError("Please fill in all fields.");
+    if (!/^\d{6}$/.test(otp)) return setError("Please enter a valid 6-digit OTP.");
+    if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password))
+      return setError("Password must be 8+ characters with letters and numbers.");
+    if (password !== confirmPassword) return setError("Passwords do not match.");
 
     setLoading(true);
     try {
       const response = await fetch(`${API_URL}/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: trimmedEmail,
-          otp: otp,
-          new_password: password,
-        }),
+        body: JSON.stringify({ email: trimmedEmail, otp, new_password: password }),
       });
 
       let data = null;
       try {
         data = await response.json();
-      } catch (e) {
+      } catch {
         /* no body */
       }
 
@@ -101,8 +68,6 @@ export default function ResetPassword() {
       setOtp("");
       setPassword("");
       setConfirmPassword("");
-
-      // send the user to the login page automatically
       setTimeout(() => navigate(loginPath), 2000);
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
@@ -112,172 +77,83 @@ export default function ResetPassword() {
   };
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#f6f8fc",
-        padding: "24px",
-      }}
+    <AuthShell
+      title="Reset Password"
+      subtitle={`${roleName} account · Enter the 6-digit OTP sent to your email and choose a new password.`}
     >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "430px",
-          background: "#ffffff",
-          border: "1px solid #e5e7eb",
-          borderRadius: "16px",
-          padding: "36px",
-          boxShadow: "0 8px 30px rgba(15, 23, 42, 0.08)",
-        }}
-      >
-        <div style={{ textAlign: "center", marginBottom: "26px" }}>
-          <div style={{ fontSize: "34px", marginBottom: "6px" }}>🔑</div>
-          <h1 style={{ margin: "0 0 8px", fontSize: "26px", color: "#111827" }}>
-            Reset Password
-          </h1>
-          <p style={{ margin: 0, color: "#6b7280", fontSize: "14px", lineHeight: 1.6 }}>
-            {roleName} account · Enter the 6-digit OTP sent to your email and choose a new password.
-          </p>
-        </div>
+      {message && <div className="auth-success">✓ {message} Redirecting to login…</div>}
+      {error && <div className="auth-error">{error}</div>}
 
-        {message && (
-          <div
-            style={{
-              marginBottom: "18px",
-              padding: "12px 14px",
-              borderRadius: "8px",
-              background: "#ecfdf5",
-              border: "1px solid #a7f3d0",
-              color: "#047857",
-              fontSize: "14px",
-            }}
-          >
-            ✓ {message} Redirecting to login…
-          </div>
-        )}
-
-        {error && (
-          <div
-            style={{
-              marginBottom: "18px",
-              padding: "12px 14px",
-              borderRadius: "8px",
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              color: "#b91c1c",
-              fontSize: "14px",
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          <div>
-            <label style={labelStyle}>Registered Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Enter your registered email"
-              autoComplete="email"
-              disabled={loading || done}
-              style={inputStyle}
-            />
-          </div>
-
-          <div>
-            <label style={labelStyle}>6-digit OTP</label>
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={6}
-              value={otp}
-              onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder="······"
-              autoComplete="one-time-code"
-              disabled={loading || done}
-              style={{
-                ...inputStyle,
-                textAlign: "center",
-                letterSpacing: "10px",
-                fontSize: "20px",
-                fontWeight: 600,
-              }}
-            />
-          </div>
-
-          <div>
-            <label style={labelStyle}>New Password</label>
-            <input
-              type={showPassword ? "text" : "password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="At least 8 characters"
-              autoComplete="new-password"
-              disabled={loading || done}
-              style={inputStyle}
-            />
-          </div>
-
-          <div>
-            <label style={labelStyle}>Confirm New Password</label>
-            <input
-              type={showPassword ? "text" : "password"}
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Re-enter new password"
-              autoComplete="new-password"
-              disabled={loading || done}
-              style={inputStyle}
-            />
-            {confirmPassword && password !== confirmPassword && (
-              <div style={{ marginTop: 6, fontSize: 12, color: "#b91c1c" }}>Passwords do not match</div>
-            )}
-          </div>
-
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#374151", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={showPassword}
-              onChange={(e) => setShowPassword(e.target.checked)}
-            />
-            Show passwords
-          </label>
-
-          <button
-            type="submit"
+      <form onSubmit={handleSubmit} className="auth-form">
+        <label className="auth-field">
+          Registered email
+          <input
+            type="email"
+            autoComplete="email"
             disabled={loading || done}
-            style={{
-              width: "100%",
-              padding: "12px",
-              border: "none",
-              borderRadius: "8px",
-              background: loading || done ? "#94a3b8" : "#1e293b",
-              color: "#ffffff",
-              fontSize: "14px",
-              fontWeight: 600,
-              cursor: loading || done ? "not-allowed" : "pointer",
-            }}
-          >
-            {loading ? "Resetting Password..." : done ? "Done ✓" : "Reset Password"}
-          </button>
-        </form>
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </label>
 
-        <div style={{ textAlign: "center", marginTop: "22px", fontSize: "14px" }}>
-          <Link to={forgotPath} style={{ color: "#6b7280", textDecoration: "none" }}>
-            Didn't get the OTP? Send again
-          </Link>
-          <div style={{ marginTop: 10 }}>
-            <Link to={loginPath} style={{ color: "#1e293b", fontWeight: 600, textDecoration: "none" }}>
-              ← Back to {roleName} Login
-            </Link>
-          </div>
-        </div>
-      </div>
-    </div>
+        <label className="auth-field">
+          6-digit OTP
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={6}
+            autoComplete="one-time-code"
+            placeholder="······"
+            className="auth-otp"
+            disabled={loading || done}
+            value={otp}
+            onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          />
+        </label>
+
+        <label className="auth-field">
+          New password
+          <input
+            type={showPassword ? "text" : "password"}
+            autoComplete="new-password"
+            placeholder="8+ characters, letters and numbers"
+            disabled={loading || done}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+
+        <label className="auth-field">
+          Confirm new password
+          <input
+            type={showPassword ? "text" : "password"}
+            autoComplete="new-password"
+            disabled={loading || done}
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+          />
+        </label>
+
+        <label className="auth-check">
+          <input
+            type="checkbox"
+            checked={showPassword}
+            onChange={(e) => setShowPassword(e.target.checked)}
+          />
+          Show passwords
+        </label>
+
+        <button type="submit" disabled={loading || done} className="auth-btn">
+          {loading ? "Resetting..." : done ? "Done ✓" : "Reset Password"}
+        </button>
+      </form>
+
+      <p className="auth-alt">
+        <Link to={forgotPath}>Didn't get the OTP? Send again</Link>
+      </p>
+      <p className="auth-home">
+        <Link to={loginPath}>← Back to {roleName} Login</Link>
+      </p>
+    </AuthShell>
   );
 }

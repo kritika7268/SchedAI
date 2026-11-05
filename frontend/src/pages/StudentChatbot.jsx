@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-const ACCENT = "#7c3aed";
+const ACCENT = "#0f766e";
 
 const SUGGESTIONS = [
   "Show today's timetable",
@@ -152,7 +152,7 @@ export default function StudentChatbot() {
                     onClick={() => send(s)}
                     style={{
                       padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                      background: "#fff", color: ACCENT, border: "1px solid #ddd6fe", borderRadius: 20,
+                      background: "#fff", color: ACCENT, border: "1px solid #b7dfd9", borderRadius: 20,
                     }}
                   >
                     {s}
@@ -181,7 +181,7 @@ export default function StudentChatbot() {
               disabled={loading || !input.trim()}
               style={{
                 padding: "10px 16px", fontWeight: 600, fontSize: 14, color: "#fff", border: "none",
-                borderRadius: 8, background: loading || !input.trim() ? "#a78bfa" : ACCENT,
+                borderRadius: 8, background: loading || !input.trim() ? "#7fbcb4" : ACCENT,
                 cursor: loading || !input.trim() ? "not-allowed" : "pointer",
               }}
             >
@@ -199,7 +199,7 @@ export default function StudentChatbot() {
           position: "fixed", right: 20, bottom: 20, zIndex: 1000,
           width: 56, height: 56, borderRadius: "50%", border: "none",
           background: ACCENT, color: "#fff", fontSize: 26, cursor: "pointer",
-          boxShadow: "0 6px 20px rgba(124,58,237,0.45)",
+          boxShadow: "0 6px 20px rgba(15,118,110,0.45)",
         }}
       >
         {open ? "×" : "💬"}

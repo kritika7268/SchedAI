@@ -47,54 +47,15 @@ const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 // =========================
 // PUBLIC LANDING PAGE ("/")
 // =========================
-function RoleCard({ emoji, title, loginPath, signupPath }) {
+function RoleCard({ emoji, title, text, loginPath, signupPath }) {
   return (
-    <div
-      style={{
-        background: "#ffffff",
-        border: "1px solid #e5e7eb",
-        borderRadius: "16px",
-        padding: "36px 28px",
-        width: "240px",
-        textAlign: "center",
-        boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
-      }}
-    >
-      <div style={{ fontSize: "40px", marginBottom: "12px" }}>{emoji}</div>
-
-      <h2 style={{ margin: "0 0 24px", fontSize: "20px", color: "#111827" }}>
-        {title}
-      </h2>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        <Link to={loginPath}>
-          <button
-            style={{
-              width: "100%",
-              padding: "10px",
-              background: "#1e293b",
-              color: "white",
-              fontWeight: "600",
-            }}
-          >
-            Login
-          </button>
-        </Link>
-
-        <Link to={signupPath}>
-          <button
-            style={{
-              width: "100%",
-              padding: "10px",
-              background: "white",
-              color: "#1e293b",
-              border: "1px solid #1e293b",
-              fontWeight: "600",
-            }}
-          >
-            Sign Up
-          </button>
-        </Link>
+    <div className="role-card">
+      <div className="role-card-icon">{emoji}</div>
+      <h2>{title}</h2>
+      <p>{text}</p>
+      <div className="role-card-actions">
+        <Link to={loginPath} className="role-btn role-btn-primary">Login</Link>
+        <Link to={signupPath} className="role-btn role-btn-ghost">Sign Up</Link>
       </div>
     </div>
   );
@@ -102,52 +63,32 @@ function RoleCard({ emoji, title, loginPath, signupPath }) {
 
 function Landing() {
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#f6f8fc",
-        padding: "40px 20px",
-      }}
-    >
-      <h1 style={{ fontSize: "34px", marginBottom: "6px", color: "#111827" }}>
-        SchedAI
-      </h1>
+    <div className="landing">
+      <header className="landing-hero">
+        <h1>SchedAI</h1>
+        <p className="landing-tag">AI-Powered Department Scheduling &amp; Academic Coordination</p>
+        <p className="landing-sub">Choose how you'd like to sign in</p>
+      </header>
 
-      <p style={{ marginBottom: "6px", color: "#374151", fontSize: "15px" }}>
-        AI-Powered Department Scheduling &amp; Academic Coordination
-      </p>
-
-      <p style={{ marginBottom: "40px", color: "#6b7280", fontSize: "16px" }}>
-        Choose how you'd like to sign in
-      </p>
-
-      <div
-        style={{
-          display: "flex",
-          gap: "24px",
-          justifyContent: "center",
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="landing-cards">
         <RoleCard
           emoji="🛠️"
           title="Admin"
+          text="Manage timetable, teachers, exams and reports."
           loginPath="/admin/login"
           signupPath="/admin/signup"
         />
         <RoleCard
           emoji="👨‍🏫"
           title="Teacher"
+          text="View classes, update syllabus and mark absence."
           loginPath="/teacher/login"
           signupPath="/teacher/signup"
         />
         <RoleCard
           emoji="🎓"
           title="Student"
+          text="See your timetable, notes, exams and project guide."
           loginPath="/student/login"
           signupPath="/student/signup"
         />
@@ -165,7 +106,9 @@ const D = {
   surface:   "#ffffff",
   muted:     "#6b7280",
   text:      "#111827",
-  accent:    "#1e293b",
+  accent:    "#1e3a5f",
+  accentBg:  "#e6f4f2",
+  accentDim: "#ccebe7",
   success:   "#16a34a",
   successBg: "#dcfce7",
   warn:      "#d97706",
