@@ -256,3 +256,26 @@ table[border] th { background: #eef2f7; font-size: 12px; text-transform: upperca
   .landing-hero { padding: 40px 16px 70px; }
   .landing-hero h1 { font-size: 34px; }
 }
+
+/* ===== TOASTS ===== */
+.toast-wrap {
+  position: fixed; top: 16px; right: 16px; z-index: 5000;
+  display: flex; flex-direction: column; gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+}
+.toast {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: #fff; border: 1px solid var(--border); border-left: 5px solid var(--info);
+  border-radius: 10px; padding: 12px 14px; font-size: 14px; color: var(--text);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .15);
+  animation: toast-in .2s ease-out;
+}
+.toast-msg { flex: 1; white-space: pre-line; }
+.toast-success { border-left-color: var(--success); }
+.toast-error   { border-left-color: var(--danger); }
+.toast-warning { border-left-color: var(--warning); }
+.toast-x {
+  background: transparent; color: var(--muted); padding: 0 4px; font-size: 20px; line-height: 1;
+}
+.toast-x:hover:not(:disabled) { background: transparent; color: var(--text); transform: none; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }

@@ -62,7 +62,21 @@ export default function RoleLayout({ role }) {
       </main>
 
       {/* AI assistant: floating chat, students only */}
-      {role === "student" && <StudentChatbot />}
+            {role === "student" && <StudentChatbot />}
+      {role === "teacher" && (
+        <StudentChatbot
+          endpoint="/ai-assistant/staff/chat"
+          placeholder="Ask about your classes…"
+          suggestions={[
+            "What classes do I have today?",
+            "How many classes do I have today?",
+            "Am I free at 11 AM?",
+            "What is my syllabus progress?",
+            "Who is absent today?",
+          ]}
+          greeting={{ role: "assistant", content: "Hi! I'm SchedAI Assistant 👋 Ask me about your classes today, free periods, syllabus progress or who is absent." }}
+        />
+      )}
     </div>
   );
 }

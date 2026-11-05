@@ -56,6 +56,8 @@ from app.file_checks import (
 )
 from app.ai_assistant import router as ai_assistant_router
 app.include_router(ai_assistant_router)
+from app.ai_assistant_staff import router as ai_assistant_staff_router
+app.include_router(ai_assistant_staff_router)
 
 from app.exams import router as exams_router, exam_week_containing
 app.include_router(exams_router)

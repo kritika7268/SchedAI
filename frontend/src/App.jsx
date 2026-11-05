@@ -42,6 +42,7 @@ import StudentSyllabus from "./pages/StudentSyllabus";
 import AdminSyllabus from "./pages/AdminSyllabus";
 import { BatchBarChart } from "./pages/SyllabusCharts";
 import { ProgressRing } from "./pages/ProgressWidgets";
+import StudentChatbot from "./pages/StudentChatbot";
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // =========================
@@ -464,6 +465,17 @@ function AdminLayout() {
 
         <Outlet />
       </main>
+            <StudentChatbot
+        endpoint="/ai-assistant/staff/chat"
+        placeholder="Ask about absences, rooms, workload…"
+        suggestions={[
+          "Which teachers are absent today?",
+          "Show today's substitution status",
+          "Which rooms are free at 2 PM?",
+          "Show teacher workload",
+        ]}
+        greeting={{ role: "assistant", content: "Hi! I'm SchedAI Assistant 👋 Ask me about absences, substitutions, free rooms or teacher workload." }}
+      />
     </div>
   );
 }

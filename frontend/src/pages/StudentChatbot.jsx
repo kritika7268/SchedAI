@@ -23,10 +23,15 @@ const GREETING = {
  * Floating AI chat for the STUDENT portal.
  * Mount once inside RoleLayout:  {role === "student" && <StudentChatbot />}
  */
-export default function StudentChatbot() {
+export default function StudentChatbot({
+  endpoint = "/ai-assistant/student/chat",
+  suggestions = SUGGESTIONS,
+  greeting = GREETING,
+  placeholder = "Ask about your classes…",
+}) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState([GREETING]);
+  const [messages, setMessages] = useState([greeting]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const endRef = useRef(null);
@@ -49,7 +54,7 @@ export default function StudentChatbot() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/ai-assistant/student/chat`, {
+      const res = await fetch(`${API_URL}${endpoint}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${user?.access_token}`,
@@ -146,7 +151,7 @@ export default function StudentChatbot() {
 
             {messages.length === 1 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-                {SUGGESTIONS.map((s) => (
+                {suggestions.map((s) => (
                   <button
                     key={s}
                     onClick={() => send(s)}
@@ -170,7 +175,7 @@ export default function StudentChatbot() {
               maxLength={500}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder="Ask about your classes…"
+              placeholder={placeholder}
               style={{
                 flex: 1, padding: "10px 12px", fontSize: 14, borderRadius: 8,
                 border: "1px solid #d1d5db", outline: "none",
