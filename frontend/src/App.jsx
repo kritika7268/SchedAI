@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter, Routes, Route, Link, Outlet } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, NavLink, Outlet } from "react-router-dom";
 import "./App.css";
 
 import Departments from "./pages/Departments";
@@ -42,59 +42,22 @@ import StudentSyllabus from "./pages/StudentSyllabus";
 import AdminSyllabus from "./pages/AdminSyllabus";
 import { BatchBarChart } from "./pages/SyllabusCharts";
 import { ProgressRing } from "./pages/ProgressWidgets";
+import StudentChatbot from "./pages/StudentChatbot";
+import NoticeBoard from "./pages/NoticeBoard";
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // =========================
 // PUBLIC LANDING PAGE ("/")
 // =========================
-function RoleCard({ emoji, title, loginPath, signupPath }) {
+function RoleCard({ emoji, title, text, loginPath, signupPath }) {
   return (
-    <div
-      style={{
-        background: "#ffffff",
-        border: "1px solid #e5e7eb",
-        borderRadius: "16px",
-        padding: "36px 28px",
-        width: "240px",
-        textAlign: "center",
-        boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
-      }}
-    >
-      <div style={{ fontSize: "40px", marginBottom: "12px" }}>{emoji}</div>
-
-      <h2 style={{ margin: "0 0 24px", fontSize: "20px", color: "#111827" }}>
-        {title}
-      </h2>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        <Link to={loginPath}>
-          <button
-            style={{
-              width: "100%",
-              padding: "10px",
-              background: "#1e293b",
-              color: "white",
-              fontWeight: "600",
-            }}
-          >
-            Login
-          </button>
-        </Link>
-
-        <Link to={signupPath}>
-          <button
-            style={{
-              width: "100%",
-              padding: "10px",
-              background: "white",
-              color: "#1e293b",
-              border: "1px solid #1e293b",
-              fontWeight: "600",
-            }}
-          >
-            Sign Up
-          </button>
-        </Link>
+    <div className="role-card">
+      <div className="role-card-icon">{emoji}</div>
+      <h2>{title}</h2>
+      <p>{text}</p>
+      <div className="role-card-actions">
+        <Link to={loginPath} className="role-btn role-btn-primary">Login</Link>
+        <Link to={signupPath} className="role-btn role-btn-ghost">Sign Up</Link>
       </div>
     </div>
   );
@@ -102,52 +65,32 @@ function RoleCard({ emoji, title, loginPath, signupPath }) {
 
 function Landing() {
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#f6f8fc",
-        padding: "40px 20px",
-      }}
-    >
-      <h1 style={{ fontSize: "34px", marginBottom: "6px", color: "#111827" }}>
-        SchedAI
-      </h1>
+    <div className="landing">
+      <header className="landing-hero">
+        <h1>SchedAI</h1>
+        <p className="landing-tag">AI-Powered Department Scheduling &amp; Academic Coordination</p>
+        <p className="landing-sub">Choose how you'd like to sign in</p>
+      </header>
 
-      <p style={{ marginBottom: "6px", color: "#374151", fontSize: "15px" }}>
-        AI-Powered Department Scheduling &amp; Academic Coordination
-      </p>
-
-      <p style={{ marginBottom: "40px", color: "#6b7280", fontSize: "16px" }}>
-        Choose how you'd like to sign in
-      </p>
-
-      <div
-        style={{
-          display: "flex",
-          gap: "24px",
-          justifyContent: "center",
-          flexWrap: "wrap",
-        }}
-      >
+      <div className="landing-cards">
         <RoleCard
           emoji="🛠️"
           title="Admin"
+          text="Manage timetable, teachers, exams and reports."
           loginPath="/admin/login"
           signupPath="/admin/signup"
         />
         <RoleCard
           emoji="👨‍🏫"
           title="Teacher"
+          text="View classes, update syllabus and mark absence."
           loginPath="/teacher/login"
           signupPath="/teacher/signup"
         />
         <RoleCard
           emoji="🎓"
           title="Student"
+          text="See your timetable, notes, exams and project guide."
           loginPath="/student/login"
           signupPath="/student/signup"
         />
@@ -165,7 +108,9 @@ const D = {
   surface:   "#ffffff",
   muted:     "#6b7280",
   text:      "#111827",
-  accent:    "#1e293b",
+  accent:    "#1e3a5f",
+  accentBg:  "#e6f4f2",
+  accentDim: "#ccebe7",
   success:   "#16a34a",
   successBg: "#dcfce7",
   warn:      "#d97706",
@@ -332,6 +277,8 @@ function SyllabusRingCard({ fallbackPercent }) {
   );
 }
 
+
+
 // =========================
 // ADMIN DASHBOARD (home page inside /admin)
 // =========================
@@ -365,6 +312,7 @@ function Dashboard() {
 
       {/* ── HOLIDAY NOTIFICATIONS ── */}
       <HolidayBanner />
+      <NoticeBoard limit={3} />
 
       {/* ── LIVE STATS ── */}
       {loading ? (
@@ -438,6 +386,11 @@ function Dashboard() {
           {/* Row 5: exam timetable + invigilators */}
           <ExamOverviewCard />
 
+          {/* Timetable: weekly grid, daily, table, download */}
+           <div className="dash-timetable">
+            <Timetable viewOnly />
+          </div>
+
           {/* Today's substitution detail, if any */}
           {stats.today.substitutions.length > 0 && (
             <div style={{
@@ -472,21 +425,6 @@ function AdminLayout() {
 
   return (
     <div className="app">
-      {/* Make the admin sidebar scrollable when the menu is taller than the screen */}
-      <style>{`
-        .sidebar {
-          max-height: 100vh;
-          overflow-y: auto !important;
-          overscroll-behavior: contain;
-        }
-        .sidebar .sidebar-nav {
-          overflow: visible !important;
-          padding-bottom: 24px;
-        }
-        .sidebar::-webkit-scrollbar { width: 6px; }
-        .sidebar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-      `}</style>
-
       <aside className="sidebar">
         <div className="sidebar-header">
           <h2>SchedAI</h2>
@@ -494,66 +432,33 @@ function AdminLayout() {
         </div>
 
         <nav className="sidebar-nav">
-          <Link to="/admin/dashboard"><span>🏠</span>Dashboard</Link>
-          <Link to="/admin/profile"><span>👤</span>Profile</Link>
-          <Link to="/admin/departments"><span>🏢</span>Departments</Link>
-          <Link to="/admin/teachers"><span>👨‍🏫</span>Teachers</Link>
-          <Link to="/admin/subjects"><span>📚</span>Subjects</Link>
-          <Link to="/admin/rooms"><span>🏫</span>Rooms</Link>
-          <Link to="/admin/students"><span>🎓</span>Students</Link>
-          <Link to="/admin/batches"><span>👥</span>Batches</Link>
-          <Link to="/admin/timetable-link"><span>🗓️</span>Timetable</Link>
-          <Link to="/admin/teacher-absences"><span>📅</span>Teacher Absences</Link>
-          <Link to="/admin/substitutions"><span>🔄</span>Substitutions</Link>
-          <Link to="/admin/syllabus-progress"><span>📊</span>Syllabus Progress</Link>
-          <Link to="/admin/project-guides"><span>👨‍💼</span>Project Guides</Link>
-          <Link to="/admin/holidays"><span>🎉</span>Holiday Calendar</Link>
-          <Link to="/admin/events"><span>📢</span>Events</Link>
-          <Link to="/admin/notes"><span>📚</span>Notes</Link>
-          <Link to="/admin/pyqs"><span>📝</span>PYQs</Link>
-          <Link to="/admin/import"><span>📥</span>Import Data</Link>
-          <Link to="/admin/exams"><span>🗒️</span>Exam Timetable</Link>
+          <NavLink to="/admin/dashboard"><span>🏠</span>Dashboard</NavLink>
+          <NavLink to="/admin/profile"><span>👤</span>Profile</NavLink>
+          <NavLink to="/admin/departments"><span>🏢</span>Departments</NavLink>
+          <NavLink to="/admin/teachers"><span>👨‍🏫</span>Teachers</NavLink>
+          <NavLink to="/admin/subjects"><span>📚</span>Subjects</NavLink>
+          <NavLink to="/admin/rooms"><span>🏫</span>Rooms</NavLink>
+          <NavLink to="/admin/students"><span>🎓</span>Students</NavLink>
+          <NavLink to="/admin/batches"><span>👥</span>Batches</NavLink>
+          <NavLink to="/admin/timetable-link"><span>🗓️</span>Timetable</NavLink>
+          <NavLink to="/admin/teacher-absences"><span>📅</span>Teacher Absences</NavLink>
+          <NavLink to="/admin/substitutions"><span>🔄</span>Substitutions</NavLink>
+          <NavLink to="/admin/syllabus-progress"><span>📊</span>Syllabus Progress</NavLink>
+          <NavLink to="/admin/project-guides"><span>👨‍💼</span>Project Guides</NavLink>
+          <NavLink to="/admin/holidays"><span>🎉</span>Holiday Calendar</NavLink>
+          <NavLink to="/admin/events"><span>📢</span>Events</NavLink>
+          <NavLink to="/admin/notes"><span>📚</span>Notes</NavLink>
+          <NavLink to="/admin/pyqs"><span>📝</span>PYQs</NavLink>
+          <NavLink to="/admin/import"><span>📥</span>Import Data</NavLink>
+          <NavLink to="/admin/exams"><span>🗒️</span>Exam Timetable</NavLink>
         </nav>
       </aside>
 
       <main className="main-content">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            alignItems: "center",
-            gap: 14,
-            padding: "12px 20px",
-            borderBottom: "1px solid #e5e7eb",
-            background: "#fff",
-          }}
-        >
+        <div className="topbar-bar">
           <NotificationBell role="admin" />
-          <Link
-            to="/admin/profile"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              textDecoration: "none",
-              color: "#111827",
-              fontSize: 14,
-              fontWeight: 600,
-            }}
-          >
-            <span
-              style={{
-                width: 30,
-                height: 30,
-                borderRadius: "50%",
-                background: "#1e293b",
-                color: "#fff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 13,
-              }}
-            >
+          <Link to="/admin/profile" className="topbar-user">
+            <span className="topbar-avatar">
               {(user?.name || "?").charAt(0).toUpperCase()}
             </span>
             {user?.name}
@@ -562,6 +467,17 @@ function AdminLayout() {
 
         <Outlet />
       </main>
+            <StudentChatbot
+        endpoint="/ai-assistant/staff/chat"
+        placeholder="Ask about absences, rooms, workload…"
+        suggestions={[
+          "Which teachers are absent today?",
+          "Show today's substitution status",
+          "Which rooms are free at 2 PM?",
+          "Show teacher workload",
+        ]}
+        greeting={{ role: "assistant", content: "Hi! I'm SchedAI Assistant 👋 Ask me about absences, substitutions, free rooms or teacher workload." }}
+      />
     </div>
   );
 }
@@ -602,6 +518,7 @@ function App() {
           <Route path="profile" element={<Profile role="teacher" />} />
           <Route path="notes" element={<Notes />} />
           <Route path="pyqs" element={<PYQs />} />
+          <Route path="notices" element={<NoticeBoard canPost />} />
         </Route>
 
         {/* Student area (sidebar: Dashboard + Profile) */}

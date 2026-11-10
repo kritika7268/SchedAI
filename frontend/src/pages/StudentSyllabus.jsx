@@ -9,8 +9,8 @@ const C = {
   border: "#e8eaed",
   text: "#0f172a",
   muted: "#64748b",
-  accent: "#7c3aed",
-  accentDim: "#ede9fe",
+  accent: "#0f766e",
+  accentDim: "#ccebe7",
   faint: "#f1f5f9",
   ok: "#16a34a",
 };

@@ -177,7 +177,7 @@ const S = {
   gridCell: { padding: 8, border: `1px solid ${C.border}`, verticalAlign: "top" },
 };
 
-function Timetable() {
+function Timetable({ viewOnly = false }) {
   const [timetables, setTimetables] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [teachers, setTeachers] = useState([]);
@@ -787,191 +787,195 @@ function Timetable() {
         }
       `}</style>
 
-      <h1 style={S.h1}>Timetable</h1>
-      <p style={S.sub}>Generate, view and manage the department timetable.</p>
+            {!viewOnly && (
+        <>
+          <h1 style={S.h1}>Timetable</h1>
+          <p style={S.sub}>Generate, view and manage the department timetable.</p>
 
-      {/* ── AI GENERATOR ── */}
-      <div className="no-print" style={S.card}>
-        <h2 style={S.cardTitle}>⚡ AI Timetable Generator</h2>
-        <p style={S.cardSub}>
-          Pick a batch and generate its conflict-free timetable — 50-minute classes, 1-hour lunch
-          (12:20 PM – 1:20 PM), balanced across the week. Other batches stay untouched.
-        </p>
-
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <select
-            value={genBatchId}
-            onChange={(e) => setGenBatchId(e.target.value)}
-            style={{ ...S.input, minWidth: 280 }}
-          >
-            <option value="">Select batch</option>
-            {batches.map((batch) => (
-              <option key={batch.batch_id} value={batch.batch_id}>
-                {batch.batch_name} — Sem {batch.semester}
-                {batch.section ? ` — Sec ${batch.section}` : ""}
-              </option>
-            ))}
-          </select>
-
-          <button
-            onClick={handleGenerate}
-            disabled={generating}
-            style={{ ...S.btnPrimary, ...(generating ? S.btnDisabled : {}) }}
-          >
-            {generating ? "Generating… (up to a minute)" : "🚀 Generate AI Timetable"}
-          </button>
-        </div>
-
-        {batches.length === 0 && (
-          <p style={{ color: C.danger, marginTop: 10, marginBottom: 0, fontSize: 13 }}>
-            No batches found — add one on the Batches page first.
-          </p>
-        )}
-
-        {generateMessage && (
-          <div
-            style={{
-              marginTop: 14,
-              padding: "10px 14px",
-              borderRadius: 8,
-              fontSize: 14,
-              whiteSpace: "pre-line",
-              background: generateMessage.type === "success" ? C.successBg : C.dangerBg,
-              color: generateMessage.type === "success" ? C.success : C.danger,
-            }}
-          >
-            {generateMessage.type === "success" ? "✓ " : ""}
-            {generateMessage.text}
-          </div>
-        )}
-      </div>
-
-      {/* ── MANUAL ADD / EDIT (collapsed by default) ── */}
-      <div className="no-print" style={S.card}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <h2 style={S.cardTitle}>
-              {editingId !== null ? "✏️ Edit class" : "➕ Add a class manually"}
-            </h2>
-            <p style={{ ...S.cardSub, margin: "4px 0 0" }}>
-              Optional — the AI generator already fills the timetable.
+          {/* ── AI GENERATOR ── */}
+          <div className="no-print" style={S.card}>
+            <h2 style={S.cardTitle}>⚡ AI Timetable Generator</h2>
+            <p style={S.cardSub}>
+              Pick a batch and generate its conflict-free timetable — 50-minute classes, 1-hour lunch
+              (12:20 PM – 1:20 PM), balanced across the week. Other batches stay untouched.
             </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              if (showManual && editingId !== null) resetForm();
-              setShowManual(!showManual);
-            }}
-            style={S.btnGhost}
-          >
-            {showManual ? "Hide form" : "Show form"}
-          </button>
-        </div>
 
-        {showManual && (
-          <form
-            onSubmit={handleSubmit}
-            style={{
-              marginTop: 18,
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-              gap: 14,
-            }}
-          >
-            <select value={dayOfWeek} onChange={(e) => setDayOfWeek(e.target.value)} style={S.input}>
-              <option value="">Select day</option>
-              {GRID_DAYS.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <select
+                value={genBatchId}
+                onChange={(e) => setGenBatchId(e.target.value)}
+                style={{ ...S.input, minWidth: 280 }}
+              >
+                <option value="">Select batch</option>
+                {batches.map((batch) => (
+                  <option key={batch.batch_id} value={batch.batch_id}>
+                    {batch.batch_name} — Sem {batch.semester}
+                    {batch.section ? ` — Sec ${batch.section}` : ""}
+                  </option>
+                ))}
+              </select>
 
-            <label style={{ fontSize: 13, color: C.muted }}>
-              Start time
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                style={{ ...S.input, width: "100%", marginTop: 4 }}
-              />
-            </label>
-
-            <label style={{ fontSize: 13, color: C.muted }}>
-              End time
-              <input
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                style={{ ...S.input, width: "100%", marginTop: 4 }}
-              />
-            </label>
-
-            <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={S.input}>
-              <option value="">Select subject</option>
-              {subjects.map((subject) => (
-                <option key={subject.subject_id} value={subject.subject_id}>
-                  {subject.subject_name} ({subject.subject_code})
-                </option>
-              ))}
-            </select>
-
-            <select value={teacherId} onChange={(e) => setTeacherId(e.target.value)} style={S.input}>
-              <option value="">Select teacher</option>
-              {teachers.map((teacher) => (
-                <option key={teacher.teacher_id} value={teacher.teacher_id}>
-                  {teacher.teacher_name}
-                </option>
-              ))}
-            </select>
-
-            <select value={roomId} onChange={(e) => setRoomId(e.target.value)} style={S.input}>
-              <option value="">Select room</option>
-              {rooms.map((room) => (
-                <option key={room.room_id} value={room.room_id}>
-                  {room.room_name} ({room.room_type})
-                </option>
-              ))}
-            </select>
-
-            <select value={semester} onChange={(e) => setSemester(e.target.value)} style={S.input}>
-              <option value="">Select semester</option>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
-                <option key={n} value={n}>
-                  Semester {n}
-                </option>
-              ))}
-            </select>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-              <button type="submit" style={S.btnPrimary}>
-                {editingId !== null ? "Update class" : "Add class"}
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                style={{ ...S.btnPrimary, ...(generating ? S.btnDisabled : {}) }}
+              >
+                {generating ? "Generating… (up to a minute)" : "🚀 Generate AI Timetable"}
               </button>
-              {editingId !== null && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    resetForm();
-                    setShowManual(false);
-                  }}
-                  style={S.btnGhost}
-                >
-                  Cancel
-                </button>
-              )}
             </div>
-          </form>
-        )}
-      </div>
+
+            {batches.length === 0 && (
+              <p style={{ color: C.danger, marginTop: 10, marginBottom: 0, fontSize: 13 }}>
+                No batches found — add one on the Batches page first.
+              </p>
+            )}
+
+            {generateMessage && (
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: "10px 14px",
+                  borderRadius: 8,
+                  fontSize: 14,
+                  whiteSpace: "pre-line",
+                  background: generateMessage.type === "success" ? C.successBg : C.dangerBg,
+                  color: generateMessage.type === "success" ? C.success : C.danger,
+                }}
+              >
+                {generateMessage.type === "success" ? "✓ " : ""}
+                {generateMessage.text}
+              </div>
+            )}
+          </div>
+
+          {/* ── MANUAL ADD / EDIT (collapsed by default) ── */}
+          <div className="no-print" style={S.card}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <h2 style={S.cardTitle}>
+                  {editingId !== null ? "✏️ Edit class" : "➕ Add a class manually"}
+                </h2>
+                <p style={{ ...S.cardSub, margin: "4px 0 0" }}>
+                  Optional — the AI generator already fills the timetable.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (showManual && editingId !== null) resetForm();
+                  setShowManual(!showManual);
+                }}
+                style={S.btnGhost}
+              >
+                {showManual ? "Hide form" : "Show form"}
+              </button>
+            </div>
+
+            {showManual && (
+              <form
+                onSubmit={handleSubmit}
+                style={{
+                  marginTop: 18,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <select value={dayOfWeek} onChange={(e) => setDayOfWeek(e.target.value)} style={S.input}>
+                  <option value="">Select day</option>
+                  {GRID_DAYS.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+
+                <label style={{ fontSize: 13, color: C.muted }}>
+                  Start time
+                  <input
+                    type="time"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    style={{ ...S.input, width: "100%", marginTop: 4 }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 13, color: C.muted }}>
+                  End time
+                  <input
+                    type="time"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                    style={{ ...S.input, width: "100%", marginTop: 4 }}
+                  />
+                </label>
+
+                <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={S.input}>
+                  <option value="">Select subject</option>
+                  {subjects.map((subject) => (
+                    <option key={subject.subject_id} value={subject.subject_id}>
+                      {subject.subject_name} ({subject.subject_code})
+                    </option>
+                  ))}
+                </select>
+
+                <select value={teacherId} onChange={(e) => setTeacherId(e.target.value)} style={S.input}>
+                  <option value="">Select teacher</option>
+                  {teachers.map((teacher) => (
+                    <option key={teacher.teacher_id} value={teacher.teacher_id}>
+                      {teacher.teacher_name}
+                    </option>
+                  ))}
+                </select>
+
+                <select value={roomId} onChange={(e) => setRoomId(e.target.value)} style={S.input}>
+                  <option value="">Select room</option>
+                  {rooms.map((room) => (
+                    <option key={room.room_id} value={room.room_id}>
+                      {room.room_name} ({room.room_type})
+                    </option>
+                  ))}
+                </select>
+
+                <select value={semester} onChange={(e) => setSemester(e.target.value)} style={S.input}>
+                  <option value="">Select semester</option>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                    <option key={n} value={n}>
+                      Semester {n}
+                    </option>
+                  ))}
+                </select>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+                  <button type="submit" style={S.btnPrimary}>
+                    {editingId !== null ? "Update class" : "Add class"}
+                  </button>
+                  {editingId !== null && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetForm();
+                        setShowManual(false);
+                      }}
+                      style={S.btnGhost}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </form>
+            )}
+          </div>
+        </>
+      )}
 
       {/* ── VIEW + FILTERS + EXPORT ── */}
       <div className="no-print" style={S.card}>

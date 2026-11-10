@@ -67,9 +67,8 @@ export default function Profile({ role }) {
             ["Classes this week", myClasses],
           ]);
         } else if (role === "student" && user?.student_id) {
-          const sRes = await fetch(`${API_URL}/students`);
-          const students = sRes.ok ? await sRes.json() : [];
-          const me = students.find((s) => s.student_id === user.student_id);
+          const sRes = await fetch(`${API_URL}/students/me`);
+          const me = sRes.ok ? await sRes.json() : null;
 
           setRows([
             ["Full name", me?.student_name || user?.name],

@@ -53,8 +53,8 @@ const C = {
   bg:        "#f8f9fb",
   surface:   "#ffffff",
   border:    "#e8eaed",
-  accent:    "#2563eb",
-  accentBg:  "#eff6ff",
+  accent:    "#0f766e",
+  accentBg:  "#e6f4f2",
   text:      "#0f172a",
   muted:     "#64748b",
   faint:     "#f1f5f9",
@@ -64,7 +64,7 @@ const C = {
   dangerBg:  "#fee2e2",
   warn:      "#d97706",
   warnBg:    "#fef3c7",
-  barActive: "#2563eb",
+  barActive: "#0f766e",
   barRest:   "#cbd5e1",
 };
 

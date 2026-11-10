@@ -9,6 +9,7 @@ import MyExams from "./MyExams";
 import { useExamWeek, ExamWeekBanner } from "./ExamWeek";
 import useTodayHoliday from "./useTodayHoliday";
 import ExamReminders from "./ExamReminders";
+import NoticeBoard from "./NoticeBoard";
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -44,9 +45,9 @@ const C = {
   bg:        "#f8f9fb",
   surface:   "#ffffff",
   border:    "#e8eaed",
-  accent:    "#7c3aed",
-  accentBg:  "#f5f3ff",
-  accentDim: "#ede9fe",
+  accent:    "#0f766e",
+  accentBg:  "#e6f4f2",
+  accentDim: "#ccebe7",
   text:      "#0f172a",
   muted:     "#64748b",
   faint:     "#f1f5f9",
@@ -204,9 +205,8 @@ export default function StudentDashboard() {
         setLoading(true);
 
         // 1. get student record
-        const sRes  = await fetch(`${API_URL}/students`);
-        const sData = sRes.ok ? await sRes.json() : [];
-        const me    = sData.find(s => s.student_id === studentId);
+        const sRes  = await fetch(`${API_URL}/students/me`);
+        const me    = sRes.ok ? await sRes.json() : null;
         if (!me) throw new Error("Student record not found. Contact admin.");
         setStudent(me);
 
@@ -390,7 +390,8 @@ export default function StudentDashboard() {
         {/* HOLIDAY NOTIFICATIONS */}
         <HolidayBanner />
         <ExamWeekBanner week={examWeek} />
-                <ExamReminders />
+        <ExamReminders />
+        <NoticeBoard limit={3} />
 
         {/* BATCH PILL */}
         {batch ? (

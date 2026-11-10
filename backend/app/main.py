@@ -1,64 +1,82 @@
-import os
 from dotenv import load_dotenv
 load_dotenv()
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from app.database import get_db_connection
-from app.timetable_generator import generate_all, DEFAULT_MAX_CLASSES_PER_TEACHER_PER_DAY, time_label, count_conflicts, DAYS as TT_DAYS, DEFAULT_SLOTS as TT_SLOTS
-from fastapi.concurrency import run_in_threadpool
-from app.substitute_engine import auto_assign_substitutes
-from typing import Optional
-from datetime import datetime, timedelta
-from pydantic import BaseModel, EmailStr, Field
-from app.auth import (hash_password,verify_password,create_access_token,get_current_user,require_role,create_password_reset_token,_hash_reset_token,get_valid_password_reset_token,mark_password_reset_token_used,)
-from fastapi import Depends
-from fastapi import UploadFile, File
-from fastapi.responses import StreamingResponse, FileResponse
-import csv
-import io
-import re
-import os
-import uuid
 
-import smtplib
-import secrets
-import hmac
-import hashlib
 import asyncio
-from fastapi.security import OAuth2PasswordBearer
-from jose import jwt, JWTError
-from app.auth import SECRET_KEY, ALGORITHM
-from app.exams import generate_daily_reminders
-from fastapi import Depends
-from app.security import api_gate
-
-from email.message import EmailMessage
-
+import csv
+import hashlib
+import hmac
+import io
+import os
+import re
+import secrets
+import smtplib
+import uuid
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
-app = FastAPI(title="SchedAI API", dependencies=[Depends(api_gate)])
+from typing import Optional
+
+from fastapi import (
+    Depends, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect,
+)
+from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from pydantic import BaseModel, EmailStr, Field
+
+from app.ai_assistant import router as ai_assistant_router
+from app.ai_assistant_staff import router as ai_assistant_staff_router
+from app.auth import (
+    ALGORITHM, SECRET_KEY, create_access_token, get_current_user,
+    hash_password, require_role, verify_password,
+)
+from app.database import get_db_connection
+from app.exams import exam_week_containing, generate_daily_reminders
+from app.exams import router as exams_router
+from app.file_checks import (
+    check_subject_matches_batch, check_teacher_owns_subject, read_valid_pdf, save_pdf,
+)
 from app.imports import router as import_router
-from app.syllabus import router as syllabus_router, overall_progress
+from app.notices import router as notices_router
+from app.project_guides import (
+    auto_assign_for_batch, project_type_for,
+)
+from app.project_guides import router as project_guides_router
+from app.security import api_gate
+from app.substitute_engine import auto_assign_substitutes
+from app.substitution import router as substitution_router
+from app.syllabus import overall_progress
+from app.syllabus import router as syllabus_router
+from app.timetable_generator import (
+    DAYS as TT_DAYS,
+    DEFAULT_MAX_CLASSES_PER_TEACHER_PER_DAY,
+    DEFAULT_SLOTS as TT_SLOTS,
+    count_conflicts, generate_all, time_label,
+)
+from app.websocket_manager import manager
+
+# ---- app (must be created BEFORE any include_router) ----
+IS_PROD = os.getenv("APP_ENV") == "production"
+app = FastAPI(
+    title="SchedAI API",
+    dependencies=[Depends(api_gate)],
+    docs_url=None if IS_PROD else "/docs",
+    redoc_url=None if IS_PROD else "/redoc",
+    openapi_url=None if IS_PROD else "/openapi.json",
+)
+
+# The substitution router is included first, so its /auto-substitute,
+# /teacher-absences and /substitutions routes win over the older ones below.
+app.include_router(substitution_router)
 app.include_router(import_router)
 app.include_router(syllabus_router)
-from fastapi import WebSocket, WebSocketDisconnect
-from app.websocket_manager import manager
-from app.project_guides import (
-    router as project_guides_router,
-    auto_assign_for_batch,
-    project_type_for,
-)
 app.include_router(project_guides_router)
-from app.file_checks import (
-    read_valid_pdf, save_pdf,
-    check_subject_matches_batch, check_teacher_owns_subject,
-)
-from app.ai_assistant import router as ai_assistant_router
 app.include_router(ai_assistant_router)
-
-from app.exams import router as exams_router, exam_week_containing
+app.include_router(ai_assistant_staff_router)
 app.include_router(exams_router)
+app.include_router(notices_router)
 async def _exam_reminder_loop():
     # runs at startup and then every hour; the dedupe key keeps it to one per day
     while True:
@@ -264,31 +282,6 @@ def _resolve_stored_file(stored_path: str, root: Path):
     if legacy.is_file():
         return legacy.resolve()
     return None
- 
-ALLOWED_UPLOAD_EXTENSIONS = {".pdf"}
-MAX_UPLOAD_SIZE_MB = 20
- 
- 
-def _validate_and_save_upload(file_bytes: bytes, original_filename: str, dest_dir: Path) -> tuple[str, str]:
-    """
-    Validates extension + size, writes the file under a random name (so
-    two people uploading "notes.pdf" never collide or overwrite each
-    other), and returns (original_filename, stored_filename).
-    """
-    ext = Path(original_filename).suffix.lower()
-    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
- 
-    size_mb = len(file_bytes) / (1024 * 1024)
-    if size_mb > MAX_UPLOAD_SIZE_MB:
-        raise HTTPException(status_code=400, detail=f"File exceeds {MAX_UPLOAD_SIZE_MB} MB limit")
- 
-    stored_filename = f"{uuid.uuid4().hex}{ext}"
-    dest_path = dest_dir / stored_filename
-    with open(dest_path, "wb") as f:
-        f.write(file_bytes)
- 
-    return original_filename, stored_filename
 
 # ==================== DEPARTMENTS ====================
 
@@ -944,6 +937,30 @@ def delete_room(room_id: int):
 
 
 # ==================== STUDENTS ====================
+@app.get("/students/me")
+def get_my_student_record(current_user: dict = Depends(require_role("student"))):
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT s.student_id, s.student_name, s.roll_number, s.email, s.semester,
+                   s.department_id, d.department_name, s.batch_id, b.batch_name,
+                   b.section AS batch_section
+            FROM students s
+            LEFT JOIN departments d ON s.department_id = d.department_id
+            LEFT JOIN batches b ON s.batch_id = b.batch_id
+            WHERE s.student_id = %s
+            """,
+            (current_user.get("student_id"),),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Student record not found")
+        return row
+    finally:
+        cursor.close()
+        connection.close()
 
 @app.get("/students")
 def get_students():
@@ -4487,10 +4504,6 @@ class LoginRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: str    
-
-class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str    
 
 
 # ==================== AUTH: endpoints ====================

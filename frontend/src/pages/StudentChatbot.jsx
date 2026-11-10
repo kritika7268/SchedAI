@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-const ACCENT = "#7c3aed";
+const ACCENT = "#0f766e";
 
 const SUGGESTIONS = [
   "Show today's timetable",
@@ -23,10 +23,15 @@ const GREETING = {
  * Floating AI chat for the STUDENT portal.
  * Mount once inside RoleLayout:  {role === "student" && <StudentChatbot />}
  */
-export default function StudentChatbot() {
+export default function StudentChatbot({
+  endpoint = "/ai-assistant/student/chat",
+  suggestions = SUGGESTIONS,
+  greeting = GREETING,
+  placeholder = "Ask about your classes…",
+}) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState([GREETING]);
+  const [messages, setMessages] = useState([greeting]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const endRef = useRef(null);
@@ -49,7 +54,7 @@ export default function StudentChatbot() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/ai-assistant/student/chat`, {
+      const res = await fetch(`${API_URL}${endpoint}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${user?.access_token}`,
@@ -146,13 +151,13 @@ export default function StudentChatbot() {
 
             {messages.length === 1 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-                {SUGGESTIONS.map((s) => (
+                {suggestions.map((s) => (
                   <button
                     key={s}
                     onClick={() => send(s)}
                     style={{
                       padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                      background: "#fff", color: ACCENT, border: "1px solid #ddd6fe", borderRadius: 20,
+                      background: "#fff", color: ACCENT, border: "1px solid #b7dfd9", borderRadius: 20,
                     }}
                   >
                     {s}
@@ -170,7 +175,7 @@ export default function StudentChatbot() {
               maxLength={500}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder="Ask about your classes…"
+              placeholder={placeholder}
               style={{
                 flex: 1, padding: "10px 12px", fontSize: 14, borderRadius: 8,
                 border: "1px solid #d1d5db", outline: "none",
@@ -181,7 +186,7 @@ export default function StudentChatbot() {
               disabled={loading || !input.trim()}
               style={{
                 padding: "10px 16px", fontWeight: 600, fontSize: 14, color: "#fff", border: "none",
-                borderRadius: 8, background: loading || !input.trim() ? "#a78bfa" : ACCENT,
+                borderRadius: 8, background: loading || !input.trim() ? "#7fbcb4" : ACCENT,
                 cursor: loading || !input.trim() ? "not-allowed" : "pointer",
               }}
             >
@@ -199,7 +204,7 @@ export default function StudentChatbot() {
           position: "fixed", right: 20, bottom: 20, zIndex: 1000,
           width: 56, height: 56, borderRadius: "50%", border: "none",
           background: ACCENT, color: "#fff", fontSize: 26, cursor: "pointer",
-          boxShadow: "0 6px 20px rgba(124,58,237,0.45)",
+          boxShadow: "0 6px 20px rgba(15,118,110,0.45)",
         }}
       >
         {open ? "×" : "💬"}
