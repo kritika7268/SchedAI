@@ -26,6 +26,7 @@ export default function RoleLayout({ role }) {
       ? [
           { to: `${base}/notes`, icon: "📚", label: "Notes" },
           { to: `${base}/pyqs`, icon: "📝", label: "PYQs" },
+          { to: `${base}/notices`, icon: "📌", label: "Notice Board" },
         ]
       : []),
     { to: `${base}/profile`, icon: "👤", label: "Profile" },

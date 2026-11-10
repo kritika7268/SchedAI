@@ -279,3 +279,73 @@ table[border] th { background: #eef2f7; font-size: 12px; text-transform: upperca
 }
 .toast-x:hover:not(:disabled) { background: transparent; color: var(--text); transform: none; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
+/* ===== NOTICE BOARD ===== */
+.notice-page { padding: 28px 32px 64px; max-width: 1100px; margin: 0 auto; }
+.notice-section { margin: 0 0 20px; }
+.notice-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+.notice-head h2 { margin: 0; font-size: 19px; }
+.notice-sub { font-size: 12px; color: var(--muted); }
+.notice-form {
+  display: flex; flex-direction: column; gap: 12px; max-width: 640px; margin-bottom: 24px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px;
+}
+.notice-form h3 { margin: 0; font-size: 16px; }
+.notice-form input[type="text"], .notice-form textarea { padding: 10px 12px; width: 100%; }
+.notice-file { font-size: 13px; font-weight: 600; color: #475569; display: flex; flex-direction: column; gap: 6px; }
+.notice-file input { font-weight: 400; }
+.notice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.notice-card {
+  background: var(--surface); border: 1px solid var(--border); border-top: 4px solid var(--accent);
+  border-radius: 12px; padding: 18px 20px; box-shadow: 0 1px 3px rgba(15, 23, 42, .06);
+}
+.notice-card h3 { margin: 0 0 4px; font-size: 16px; }
+.notice-meta { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.notice-body { margin: 0 0 12px; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.notice-body a { color: var(--secondary); font-weight: 600; text-decoration: underline; }
+.notice-img { width: 100%; max-height: 320px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border); }
+.notice-del { margin-top: 12px; background: #fee2e2; color: var(--danger); padding: 6px 12px; font-size: 13px; }
+.notice-del:hover:not(:disabled) { background: #fecaca; }
+.notice-more { margin-top: 14px; background: #eef2f7; color: var(--primary); }
+.notice-empty { color: var(--muted); font-size: 14px; margin: 0; }
+@media (max-width: 650px) { .notice-page { padding: 20px 14px 48px; } }
+
+/* ===== RESPONSIVE POLISH ===== */
+
+/* pages that use fixed paddings inline: tighten them on small screens */
+@media (max-width: 650px) {
+  .main-content > div { padding-left: 14px !important; padding-right: 14px !important; }
+  .main-content h1 { font-size: 22px; }
+
+  /* forms and inputs never overflow */
+  .main-content input,
+  .main-content select,
+  .main-content textarea { max-width: 100%; }
+
+  /* big tables scroll sideways instead of breaking the page */
+  .main-content table { display: block; overflow-x: auto; white-space: nowrap; }
+
+  /* dashboard stat cards: two per row */
+  .dashboard [style*="flex: 1 1 150px"] { flex: 1 1 calc(50% - 14px) !important; min-width: 0 !important; }
+
+  /* notification dropdown fits the screen */
+  .topbar-bar > div > div[style*="position: absolute"] { width: min(340px, 92vw) !important; right: -40px !important; }
+
+  /* chatbot window */
+  .toast-wrap { top: 8px; right: 8px; }
+}
+
+/* timetable on dashboard: remove the negative margins on phones */
+@media (max-width: 900px) {
+  .dashboard [style*="margin-left: -32px"],
+  .dashboard [style*="marginLeft: -32px"] { margin-left: 0 !important; margin-right: 0 !important; }
+}
+
+/* print: hide sidebar and top bar */
+@media print {
+  .sidebar, .topbar-bar, .toast-wrap { display: none !important; }
+  .main-content { margin-left: 0 !important; width: 100% !important; }
+}
+
+.dash-timetable { margin: 0 -32px 14px; }
+@media (max-width: 900px) { .dash-timetable { margin: 0 -14px 14px; } }

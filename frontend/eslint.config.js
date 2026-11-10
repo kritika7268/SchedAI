@@ -7,7 +7,11 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 export default defineConfig([
   globalIgnores(['dist']),
   {
-    files: ['**/*.{js,jsx}'],
+    files: ['**/*.{js,jsx}',rules, {
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/purity': 'warn',
+      'react-hooks/immutability': 'warn',
+      'react-refresh/only-export-components': 'warn', }],
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,

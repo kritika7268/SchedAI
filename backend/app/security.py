@@ -20,6 +20,7 @@ ADMIN_WRITE = ("/departments", "/teachers", "/subjects", "/rooms", "/students",
                "/batches", "/timetables", "/syllabus-progress", "/holidays",
                "/events", "/substitutions", "/generate-timetable", "/teacher-absences")
 ADMIN_ANY = ("/admin", "/teacher-workload", "/students/bulk-import")
+STAFF_READ_EXACT = {("GET", "/students"), ("GET", "/students-with-batch")}
 TEACHER_OWN = {("POST", "/auto-substitute"), ("POST", "/teacher-absences")}
 
 # (max requests, seconds) per IP
@@ -72,6 +73,9 @@ def api_gate(conn: HTTPConnection):
         if role == "teacher" and str(conn.query_params.get("teacher_id")) == str(user.get("teacher_id")):
             return
         raise HTTPException(403, "You can only do this for yourself")
+    
+    if (method, path) in STAFF_READ_EXACT and role not in ("admin", "teacher"):
+        raise HTTPException(403, "Not allowed")
 
     if any(_under(path, p) for p in ADMIN_ANY) or \
        (method in WRITE and any(_under(path, p) for p in ADMIN_WRITE)):

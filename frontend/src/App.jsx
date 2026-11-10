@@ -43,6 +43,7 @@ import AdminSyllabus from "./pages/AdminSyllabus";
 import { BatchBarChart } from "./pages/SyllabusCharts";
 import { ProgressRing } from "./pages/ProgressWidgets";
 import StudentChatbot from "./pages/StudentChatbot";
+import NoticeBoard from "./pages/NoticeBoard";
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // =========================
@@ -311,6 +312,7 @@ function Dashboard() {
 
       {/* ── HOLIDAY NOTIFICATIONS ── */}
       <HolidayBanner />
+      <NoticeBoard limit={3} />
 
       {/* ── LIVE STATS ── */}
       {loading ? (
@@ -385,7 +387,7 @@ function Dashboard() {
           <ExamOverviewCard />
 
           {/* Timetable: weekly grid, daily, table, download */}
-          <div style={{ marginBottom: 14, marginLeft: -32, marginRight: -32 }}>
+           <div className="dash-timetable">
             <Timetable viewOnly />
           </div>
 
@@ -516,6 +518,7 @@ function App() {
           <Route path="profile" element={<Profile role="teacher" />} />
           <Route path="notes" element={<Notes />} />
           <Route path="pyqs" element={<PYQs />} />
+          <Route path="notices" element={<NoticeBoard canPost />} />
         </Route>
 
         {/* Student area (sidebar: Dashboard + Profile) */}
